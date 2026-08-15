@@ -1,0 +1,74 @@
+/* ============================================================
+   Kimi Code Token 监控 · 多页面 Dashboard
+   视觉语言：GitHub Dark（参考已调试 demo 的组件质感）
+   令牌：bg #0d1117 · panel #161b22 · border #21262d/#30363d
+        text #e6edf3/#8b949e/#6e7681 · 橙 #f0883e · 绿 #3fb950
+        蓝 #58a6ff · 紫 #a371f7 · 红 #f85149 · 黄 #d29922
+   ------------------------------------------------------------
+   模块拆分（原 style.css 纯搬运，规则不增删改）：
+     base.css        CSS 变量、reset、通用排版、滚动条、主题
+     layout.css      布局与页面结构（侧边栏/顶栏/主区/页面容器）
+     components.css  卡片/表格/按钮/徽标/弹窗/图表/分页等组件
+   本文件：base.css
+   ============================================================ */
+:root {
+  --bg: #0d1117;            /* 页面背景 */
+  --content: #0d1117;       /* 主内容区背景 */
+  --sb: #0d1117;            /* 侧边栏背景 */
+  --panel: #161b22;         /* 卡片背景 */
+  --panel-2: #1c2128;       /* hover / 高亮 */
+  --line: #21262d;          /* 卡片边框 */
+  --line-soft: rgba(48,54,61,.55); /* 行分隔线 */
+  --bd: #30363d;            /* hover 边框 */
+  --text: #e6edf3;
+  --text-2: #8b949e;
+  --muted: #6e7681;
+  --accent: #f0883e;
+  --accent-soft: rgba(240,136,62,.13);
+  --in: #f0883e;            /* 输入未命中 */
+  --cache: #3fb950;         /* 缓存命中 */
+  --cwrite: #34d399;        /* 缓存写入 */
+  --out: #58a6ff;           /* 输出 */
+  --req: #a371f7;           /* 请求曲线 */
+  --ok: #3fb950;
+  --err: #f85149;
+  --warn: #d29922;
+  --radius: 10px;
+  --radius-btn: 6px;
+  --radius-badge: 3px;
+  --mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); }
+body {
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+.num, .m-value, .r-num, .r-left, .history-num, .event-stream,
+.dl-num, .dc-value, .history-date, .m-sub, .mono, .tt-num, .ev-time { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #21262d; border-radius: 3px; }
+
+button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
+  outline: 2px solid rgba(240,136,62,.5);
+  outline-offset: 1px;
+}
+
+/* ---------- 浅色主题 ---------- */
+html[data-theme="light"] {
+  --bg: #f6f8fa; --content: #f6f8fa; --sb: #ffffff;
+  --panel: #ffffff; --panel-2: #eef1f4;
+  --line: #d8dee4; --line-soft: rgba(208,215,222,.7); --bd: #c9d1d9;
+  --text: #1f2328; --text-2: #57606a; --muted: #8b949e;
+  --accent: #d96a1f; --accent-soft: rgba(217,106,31,.12);
+  --in: #d96a1f; --cache: #1a7f37; --cwrite: #0e7f66; --out: #0969da; --req: #8250df;
+  --ok: #1a7f37; --err: #cf222e; --warn: #9a6700;
+}
+html[data-theme="light"] .chart { background-image: repeating-linear-gradient(to top, rgba(0,0,0,.03) 0, rgba(0,0,0,.03) 1px, transparent 1px, transparent 25%); }
+html[data-theme="light"] .tt-row:hover { background: rgba(0,0,0,.02); }

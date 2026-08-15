@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+data.db
+data.db-wal
+data.db-shm
+data.json
+data.json.migrated-*.bak
+data.json.corrupt-*.bak
+*.tmp
+.playwright-cli/

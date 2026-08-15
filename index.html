@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Kimi Code Token 监控</title>
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/layout.css">
+<link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- 左侧边栏 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <span class="mark">K</span>
+      <div class="sb-brand-text">
+        <div class="sb-title">Kimi Code Token</div>
+        <div class="sb-sub">Token 监控</div>
+      </div>
+    </div>
+    <nav class="sb-nav">
+      <a href="#view-overview" class="nav-item active" data-view="overview">
+        <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+        <span>概览</span>
+      </a>
+      <a href="#view-events" class="nav-item" data-view="events">
+        <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span>实时事件</span>
+      </a>
+      <a href="#view-models" class="nav-item" data-view="models">
+        <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <span>模型分析</span>
+      </a>
+      <a href="#view-sessions" class="nav-item" data-view="sessions">
+        <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>会话分析</span>
+      </a>
+      <a href="#view-history" class="nav-item" data-view="history">
+        <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <span>历史统计</span>
+      </a>
+      <a href="#view-cost" class="nav-item" data-view="cost">
+        <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+        <span>费用分析</span>
+      </a>
+      <a href="#view-settings" class="nav-item" data-view="settings">
+        <svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>设置</span>
+      </a>
+    </nav>
+    <div class="sb-foot">
+      <div class="sb-f-label"><i class="dot ok"></i>服务运行中</div>
+      <span class="sb-f-val mono" id="sb-service">127.0.0.1:8787</span>
+      <div style="color:var(--muted);margin-bottom:2px;">最后更新</div>
+      <div class="mono" style="margin-bottom:8px;" id="sb-updated">—</div>
+      <div class="sb-divider"></div>
+      <div style="color:var(--muted);margin-bottom:2px;">数据源目录</div>
+      <div class="mono" style="margin-bottom:8px;" id="sb-dir">~/.kimi-code/sessions</div>
+      <div style="color:var(--muted);margin-bottom:2px;">版本</div>
+      <div class="mono" style="margin-bottom:8px;">v1.0.0</div>
+      <div class="sb-divider"></div>
+      <label class="theme-toggle" title="切换深浅色主题">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <span>深色模式</span>
+        <button class="toggle-switch on" id="theme-toggle" aria-label="深色模式"></button>
+      </label>
+    </div>
+  </aside>
+
+  <!-- 主内容区 -->
+  <div class="main">
+
+    <!-- 顶栏（各页面标题 + 全局时间范围与状态） -->
+    <header class="topbar">
+      <div class="tb-title">
+        <h1 id="page-title">概览</h1>
+        <span class="tb-sub muted" id="page-subtitle">今日数据总览</span>
+      </div>
+      <div class="tb-right">
+        <div class="range-switch" id="range-switch">
+          <button data-range="today" class="active">今日</button>
+          <button data-range="week">7天</button>
+          <button data-range="month">30天</button>
+          <button data-range="custom" disabled>自定义</button>
+        </div>
+        <span class="refresh-hint" id="conn-status"><i class="dot ok"></i>自动刷新 · 2s</span>
+        <button class="link-btn" id="refresh-now" title="手动刷新">刷新</button>
+        <button class="link-btn" id="open-dir">数据目录</button>
+        <button class="link-btn" id="price-toggle">定价</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- ==================== 视图 1：概览 ==================== -->
+      <section class="view active" id="view-overview">
+        <div class="metrics">
+          <div class="metric metric-main">
+        <div class="m-head"><span class="m-ico ico-coin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span></div>            <div class="m-label" id="m-total-label">今日总 Tokens</div>
+            <div class="m-value" id="m-total">—</div>
+            <div class="m-sub" id="m-total-sub">等待数据</div>
+          </div>
+          <div class="metric">
+        <div class="m-head"><span class="m-ico ico-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2z"/><path d="M12 12h.01"/></svg></span></div>            <div class="m-label">费用预估</div>
+            <div class="m-value" id="m-cost">—</div>
+            <div class="m-sub" id="m-cost-sub">按官方价</div>
+          </div>
+          <div class="metric">
+        <div class="m-head"><span class="m-ico ico-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span></div>            <div class="m-label">缓存命中率</div>
+            <div class="m-value" id="m-cache">—</div>
+            <div class="m-sub" id="m-cache-sub">按 token 加权</div>
+          </div>
+          <div class="metric">
+        <div class="m-head"><span class="m-ico ico-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span></div>            <div class="m-label">请求次数</div>
+            <div class="m-value" id="m-calls">—</div>
+            <div class="m-sub" id="m-calls-sub">回合数 (turn)</div>
+          </div>
+          <div class="metric metric-peak">
+        <div class="m-head"><span class="m-ico ico-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span></div>            <div class="m-label">峰值小时</div>
+            <div class="m-value" id="m-peak">—</div>
+            <div class="m-sub" id="m-peak-sub">今日最活跃时段</div>
+          </div>
+          <div class="metric">
+        <div class="m-head"><span class="m-ico ico-yellow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span></div>            <div class="m-label">实时速率</div>
+            <div class="m-value" id="m-rate">—</div>
+            <div class="m-sub" id="m-rate-sub">tokens / min</div>
+          </div>
+        </div>
+
+        <!-- Token 资源分配（设计稿：主/子两块 + 占比条） -->
+        <section class="panel" id="scope-panel">
+          <div class="panel-head">
+            <div class="pt"><h2>Token 资源分配</h2></div>
+            <div class="scope-legend">
+              <span><i class="dot-main"></i>主智能体</span>
+              <span><i class="dot-sub"></i>子智能体</span>
+              <span id="scope-summary"></span>
+            </div>
+          </div>
+          <div class="scope-grid">
+            <div class="scope-col">
+              <div class="scope-head-main">
+                <div class="scope-head-bar stacked" id="scope-head-bar-main">主</div>
+                <span class="muted">主智能体 (main)</span>
+              </div>
+              <div class="scope-num" id="scope-main-total">—</div>
+              <div class="scope-sub" id="scope-main-info">—</div>
+              <div class="scope-model-legend" id="scope-main-legend"></div>
+              <div class="scope-bar-track" style="margin-top:12px;">
+                <i class="sb-main" id="scope-bar-main"></i>
+                <i class="sb-sub" id="scope-bar-sub"></i>
+              </div>
+              <div class="scope-pct">
+                <span id="scope-pct-main"></span>
+                <span id="scope-pct-sub"></span>
+              </div>
+            </div>
+            <div class="scope-col">
+              <div class="scope-head-main">
+                <div class="scope-head-bar stacked" id="scope-head-bar-sub">子</div>
+                <span class="muted">子智能体 / 后台 (agent-*)</span>
+              </div>
+              <div class="scope-num" id="scope-sub-total">—</div>
+              <div class="scope-sub" id="scope-sub-info">—</div>
+              <div class="scope-model-legend" id="scope-sub-legend"></div>
+              <div class="scope-bar-track" style="margin-top:12px;">
+                <i class="sb-main" id="scope-bar-main-2"></i>
+                <i class="sb-sub" id="scope-bar-sub-2"></i>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Token 使用趋势 -->
+        <section class="panel">
+          <div class="panel-head">
+            <div class="pt">
+              <h2>Token 使用趋势</h2>
+              <div class="chart-filter" id="chart-filter">
+                <button data-gran="hour" class="active">按小时</button>
+                <button data-gran="day">按天</button>
+              </div>
+              <span class="muted" id="chart-title">今日小时趋势</span>
+            </div>
+            <div class="legend">
+              <span class="lg"><i class="sw in"></i>输入未命中</span>
+              <span class="lg"><i class="sw cache"></i>缓存命中</span>
+              <span class="lg"><i class="sw out"></i>输出</span>
+              <span class="lg"><i class="sw req"></i>请求次数</span>
+            </div>
+          </div>
+          <div class="chart" id="chart"></div>
+          <div class="axis" id="chart-axis"></div>
+        </section>
+
+        <!-- 底部三列：模型分布 / 会话 TOP3 / 模型明细 TOP3 -->
+        <div class="tri">
+          <section class="panel" id="ov-models">
+            <div class="panel-head"><div class="pt"><h2>模型 Token 分布</h2></div><span class="muted" id="model-count"></span></div>
+            <div class="donut-wrap">
+              <div class="donut" id="model-donut">
+                <div class="donut-center"><div class="dc-label">总计</div><div class="dc-value" id="model-donut-total">—</div></div>
+              </div>
+              <div class="donut-legend" id="model-legend"></div>
+            </div>
+          </section>
+          <section class="panel" id="ov-sessions">
+            <div class="panel-head"><div class="pt"><h2>会话分析 TOP 3</h2></div><button class="link-btn" id="goto-sessions">全部会话 →</button></div>
+            <div class="rows" id="ov-session-rows"></div>
+          </section>
+          <section class="panel" id="ov-models-table">
+            <div class="panel-head"><div class="pt"><h2>模型使用明细 TOP 3</h2></div><button class="link-btn" id="goto-models">全部模型 →</button></div>
+            <div class="rows" id="ov-model-rows"></div>
+          </section>
+        </div>
+
+        <!-- 历史统计 -->
+        <section class="panel">
+          <div class="panel-head">
+            <div class="pt"><h2>历史统计</h2></div>
+            <div class="history-filter" id="history-filter">
+              <button data-hdays="7">7天</button>
+              <button data-hdays="30" class="active">30天</button>
+              <button data-hdays="90">90天</button>
+              <button data-hdays="all">全部</button>
+            </div>
+            <span class="muted" id="history-summary"></span>
+          </div>
+          <div class="history" id="history-list"></div>
+        </section>
+      </section>
+
+      <!-- ================== 视图 2：实时事件 ================== -->
+      <section class="view" id="view-events">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="pt"><h2>实时事件流</h2><span class="pt-sub">Live Stream</span></div>
+            <div class="ph-right">
+              <span class="live-badge"><i class="dot ok"></i>Live</span>
+              <span class="ev-count" id="event-count"></span>
+              <span class="muted" id="event-follow-hint">自动跟随</span>
+            </div>
+          </div>
+          <div class="ev-filter">
+            <div class="ev-filter-scope" id="ev-filter-scope">
+              <button data-scope="all" class="active">全部</button>
+              <button data-scope="main">主</button>
+              <button data-scope="sub">子</button>
+            </div>
+            <div class="ph-right">
+              <select id="ev-model-filter" aria-label="模型筛选"><option value="">全部模型</option></select>
+              <button class="link-btn" id="ev-more">查看全部事件 →</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <div class="rows" id="event-rows"></div>
+          </div>
+          <div class="pager" id="ev-pager"></div>
+        </div>
+      </section>
+
+      <!-- ================== 视图 3：模型分析 ================== -->
+      <section class="view" id="view-models">
+        <div class="metrics sub" id="mo-kpis">
+          <div class="metric sub"><div class="m-label">模型总数</div><div class="m-value" id="mo-count">—</div><div class="m-sub">范围内</div></div>
+          <div class="metric sub"><div class="m-label">总 Tokens</div><div class="m-value" id="mo-total">—</div><div class="m-sub">输入 · 缓存 · 输出</div></div>
+          <div class="metric sub"><div class="m-label">平均命中率</div><div class="m-value" id="mo-cache">—</div><div class="m-sub">按 token 加权</div></div>
+          <div class="metric sub"><div class="m-label">总请求数</div><div class="m-value" id="mo-req">—</div><div class="m-sub">回合数 <span id="mo-calls-sub">—</span></div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="pt"><h2>模型列表</h2><span class="muted">点击模型名进入模型详情</span></div></div>
+          <div class="table-wrap"><div class="rows" id="mo-rows"></div></div>
+          <div class="pager" id="mo-pager"></div>
+        </div>
+      </section>
+
+      <!-- 模型详情（子视图） -->
+      <section class="view" id="view-model-detail">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="pt"><h2 id="md-name">模型详情</h2><span class="muted" id="md-alias"></span></div>
+            <button class="link-btn" id="md-back">← 返回模型分析</button>
+          </div>
+          <div class="metrics sub" id="md-kpis">
+            <div class="metric sub"><div class="m-label">总 Tokens</div><div class="m-value" id="md-total">—</div><div class="m-sub">范围内合计</div></div>
+            <div class="metric sub"><div class="m-label">缓存命中率</div><div class="m-value" id="md-cache">—</div><div class="m-sub">缓存 / 输入</div></div>
+            <div class="metric sub"><div class="m-label">请求次数</div><div class="m-value" id="md-req">—</div><div class="m-sub">回合数（round）<span id="md-calls">—</span></div></div>
+            <div class="metric sub"><div class="m-label">费用预估</div><div class="m-value" id="md-cost">—</div><div class="m-sub">按当前定价</div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="pt"><h2>使用趋势</h2><span class="muted" id="md-trend-sub">近 30 天 · 按日</span></div>
+            <div class="legend"><span class="lg"><i class="sw in"></i>输入</span><span class="lg"><i class="sw cache"></i>缓存</span><span class="lg"><i class="sw out"></i>输出</span></div>
+          </div>
+          <div class="chart" id="md-chart"></div>
+          <div class="axis" id="md-axis"></div>
+        </div>
+        <div class="grid-2sub">
+          <section class="panel">
+            <div class="panel-head"><div class="pt"><h2>会话内分析</h2></div></div>
+            <div class="rows" id="md-sess-rows"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div class="pt"><h2>费用构成</h2></div></div>
+            <div class="donut-wrap"><div class="donut" id="md-donut"><div class="donut-center"><div class="dc-label">总计</div><div class="dc-value" id="md-donut-total">—</div></div></div>
+            <div class="donut-legend" id="md-donut-legend"></div></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- ================== 视图 4：会话分析 ================== -->
+      <section class="view" id="view-sessions">
+        <div class="metrics sub" id="ss-kpis">
+          <div class="metric sub"><div class="m-label">会话总数</div><div class="m-value" id="ss-count">—</div><div class="m-sub">范围内</div></div>
+          <div class="metric sub"><div class="m-label">总 Tokens</div><div class="m-value" id="ss-total">—</div><div class="m-sub">输入 · 缓存 · 输出</div></div>
+          <div class="metric sub"><div class="m-label">总请求数</div><div class="m-value" id="ss-req">—</div><div class="m-sub">点击行展开详情</div></div>
+          <div class="metric sub"><div class="m-label">总回合数</div><div class="m-value" id="ss-calls">—</div><div class="m-sub">token 回合</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="pt"><h2>会话列表</h2><span class="muted">点击行展开 · 点击名称进会话详情</span></div></div>
+          <div class="table-wrap"><div class="rows" id="ss-rows"></div></div>
+          <div class="pager" id="ss-pager"></div>
+        </div>
+      </section>
+
+      <!-- 会话详情：子视图 -->
+      <section class="view" id="view-session-detail">
+        <div class="panel">
+          <div class="panel-head">
+            <div class="pt"><h2 id="sd-name">会话详情</h2><span class="muted" id="sd-id"></span></div>
+            <button class="link-btn" id="sd-back">← 返回会话分析</button>
+          </div>
+          <div class="metrics sub" id="sd-kpis">
+            <div class="metric sub"><div class="m-label">总 Tokens</div><div class="m-value" id="sd-total">—</div><div class="m-sub">范围内合计</div></div>
+            <div class="metric sub"><div class="m-label">缓存命中率</div><div class="m-value" id="sd-cache">—</div><div class="m-sub">缓存 / 输入</div></div>
+            <div class="metric sub"><div class="m-label">输入 / 输出</div><div class="m-value" id="sd-io">—</div><div class="m-sub">input · output</div></div>
+            <div class="metric sub"><div class="m-label">总费用</div><div class="m-value" id="sd-cost">—</div><div class="m-sub">回合数</div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="pt"><h2>使用趋势</h2><span class="muted" id="sd-trend-sub">近 30 天 · 按日</span></div>
+            <div class="legend"><span class="lg"><i class="sw in"></i>输入</span><span class="lg"><i class="sw cache"></i>缓存</span><span class="lg"><i class="sw out"></i>输出</span></div>
+          </div>
+          <div class="chart" id="sd-chart"></div>
+          <div class="axis" id="sd-axis"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="pt"><h2>模型使用占比</h2></div></div>
+          <div class="rows" id="sd-model-rows"></div>
+          <div class="panel-head" style="margin-top:14px"><div class="pt"><h2>小时分布</h2></div></div>
+          <div class="rows" id="sd-hour-rows"></div>
+        </div>
+      </section>
+
+      <!-- ================== 视图 5：历史统计 ================== -->
+      <section class="view" id="view-history">
+        <div class="metrics sub" id="hs-kpis">
+          <div class="metric sub"><div class="m-label">总费用</div><div class="m-value" id="hs-cost">—</div><div class="m-sub" id="hs-cost-sub">选定时段</div></div>
+          <div class="metric sub"><div class="m-label">日均费用</div><div class="m-value" id="hs-daily">—</div><div class="m-sub">总费用 / 天数</div></div>
+          <div class="metric sub"><div class="m-label">平均命中率</div><div class="m-value" id="hs-cache">—</div><div class="m-sub">按 token 加权</div></div>
+          <div class="metric sub"><div class="m-label">总请求数</div><div class="m-value" id="hs-req">—</div><div class="m-sub" id="hs-calls-sub">—</div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="pt"><h2>历史趋势</h2><span class="muted">每日 Token 消耗</span></div>
+            <div class="history-filter" id="ht-filter">
+              <button data-hdays="7" class="active">7天</button>
+              <button data-hdays="30">30天</button>
+              <button data-hdays="90">90天</button>
+              <button data-hdays="all">全部</button>
+            </div>
+          </div>
+          <div class="chart" id="ht-chart"></div>
+          <div class="axis" id="ht-axis"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="pt"><h2>历史明细</h2></div></div>
+          <div class="table-wrap"><div class="rows" id="ht-rows"></div></div>
+          <div class="pager" id="ht-pager"></div>
+        </div>
+      </section>
+
+      <!-- ================== 视图 6：费用分析 ================== -->
+      <section class="view" id="view-cost">
+        <div class="metrics sub" id="cs-kpis">
+          <div class="metric sub"><div class="m-label">今日费用预估</div><div class="m-value" id="cs-today">—</div><div class="m-sub">按当前定价</div></div>
+          <div class="metric sub"><div class="m-label">昨日费用</div><div class="m-value" id="cs-yesterday">—</div><div class="m-sub" id="cs-vs">较昨日</div></div>
+          <div class="metric sub"><div class="m-label">近 7 日费用</div><div class="m-value" id="cs-week">—</div><div class="m-sub">近 7 天合计</div></div>
+          <div class="metric sub"><div class="m-label">近 30 日费用</div><div class="m-value" id="cs-month">—</div><div class="m-sub">近 30 天合计</div></div>
+        </div>
+        <div class="grid-2sub">
+          <section class="panel">
+            <div class="panel-head"><div class="pt"><h2>费用趋势</h2><span class="muted" id="cs-trend-sub">近 30 天 · 按日</span></div></div>
+            <div class="chart line" id="cs-chart"></div>
+            <div class="axis" id="cs-axis"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div class="pt"><h2>费用构成</h2><span class="muted" id="cs-donut-sub">近 30 天</span></div></div>
+            <div class="donut-wrap"><div class="donut" id="cs-donut"><div class="donut-center"><div class="dc-label">总费用</div><div class="dc-value" id="cs-donut-total">—</div></div></div>
+            <div class="donut-legend" id="cs-donut-legend"></div></div>
+          </section>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div class="pt"><h2>费用明细</h2></div></div>
+          <div class="table-wrap"><div class="rows" id="cs-rows"></div></div>
+          <div class="pager" id="cs-pager"></div>
+        </div>
+      </section>
+
+      <!-- ================== 视图 7：设置 ================== -->
+      <section class="view" id="view-settings">
+        <div class="gs-wrap">
+          <section class="panel">
+            <div class="panel-head"><div class="pt"><h2>定价设置</h2><span class="muted">元 / 百万 tokens · 本地保存</span></div></div>
+            <div class="price-form">
+              <label>输入（缓存未命中）<input type="number" id="p-miss" step="0.01" min="0"></label>
+              <label>输入（缓存命中）<input type="number" id="p-cache" step="0.001" min="0"></label>
+              <label>输入（缓存写入）<input type="number" id="p-cwrite" step="0.001" min="0"></label>
+              <label>输出<input type="number" id="p-out" step="0.01" min="0"></label>
+              <div class="modal-actions">
+                <button class="btn-ghost" id="set-price-reset">恢复默认</button>
+                <button class="btn" id="set-price-save">保存</button>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div class="pt"><h2>系统设置</h2></div></div>
+            <div class="gs-row"><span class="gs-label">主题模式</span>
+              <div class="seg" id="set-theme">
+                <button data-theme-mode="dark" class="active">深色</button>
+                <button data-theme-mode="light">浅色</button>
+              </div>
+            </div>
+            <div class="gs-row"><span class="gs-label">显示模式</span>
+              <div class="seg" id="set-density">
+                <button data-density="full" class="active">完整</button>
+                <button data-density="compact">简洁</button>
+              </div>
+            </div>
+            <div class="gs-row"><span class="gs-label">自动刷新</span><span class="gs-val">每 2 秒（可点顶栏“刷新”手动触发）</span></div>
+            <div class="gs-row"><span class="gs-label">版本</span><span class="gs-val mono">v1.0.0 · 纯本地服务</span></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div class="pt"><h2>数据管理</h2></div></div>
+            <div class="gs-row"><span class="gs-label">数据源目录</span><span class="gs-val mono" id="gs-dir">~/.kimi-code/sessions</span></div>
+            <div class="gs-row"><span class="gs-label">采集日志数</span><span class="gs-val mono" id="gs-files">—</span></div>
+            <div class="gs-actions">
+              <button class="btn btn-blue" id="export-config">导出配置</button>
+              <button class="link-btn" id="open-dir2">打开数据目录</button>
+              <button class="btn btn-danger" id="clear-local">清空本地数据</button>
+            </div>
+            <p class="muted" style="margin:10px 0 0">“清空本地数据”仅清除浏览器中的定价等本地配置，不影响服务器 data.json 统计。</p>
+          </section>
+        </div>
+      </section>
+
+      <div class="hint-bar">💡 提示：所有时间均为本地时间，数据每 2 秒自动刷新一次</div>
+      <footer class="foot">
+        <span id="foot-status">本地服务 · 仅 127.0.0.1</span>
+        <span id="last-refresh"></span>
+      </footer>
+    </main>
+  </div>
+</div>
+
+<!-- 定价弹窗（全局） -->
+<div class="overlay hidden" id="price-overlay">
+  <div class="modal">
+    <h2>定价设置</h2>
+    <p class="modal-sub">元 / 百万 tokens · 默认 DeepSeek 官方价</p>
+    <label>输入（缓存未命中）<input type="number" id="pm-miss" step="0.01" min="0"></label>
+    <label>输入（缓存命中）<input type="number" id="pm-cache" step="0.001" min="0"></label>
+    <label>输入（缓存写入）<input type="number" id="pm-cwrite" step="0.001" min="0"></label>
+    <label>输出<input type="number" id="pm-out" step="0.01" min="0"></label>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="price-reset">恢复默认</button>
+      <button class="btn" id="price-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/utils.js"></script>
+<script src="js/data.js"></script>
+<script src="js/render.js"></script>
+<script src="js/main.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/views.js"></script>
+</body>
+</html>
