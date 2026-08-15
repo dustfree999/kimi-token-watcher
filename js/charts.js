@@ -153,32 +153,92 @@ window.Charts = (function () {
     }
   }
 
-  /** 环形图：entries=[{label,value,color}] */
+  function arcPath(cx, cy, rIn, rOut, startAngle, endAngle) {
+    const toRad = a => (a - 90) * Math.PI / 180;
+    const x1 = cx + rOut * Math.cos(toRad(startAngle));
+    const y1 = cy + rOut * Math.sin(toRad(startAngle));
+    const x2 = cx + rOut * Math.cos(toRad(endAngle));
+    const y2 = cy + rOut * Math.sin(toRad(endAngle));
+    const x3 = cx + rIn * Math.cos(toRad(endAngle));
+    const y3 = cy + rIn * Math.sin(toRad(endAngle));
+    const x4 = cx + rIn * Math.cos(toRad(startAngle));
+    const y4 = cy + rIn * Math.sin(toRad(startAngle));
+    const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
+    return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${rOut} ${rOut} 0 ${largeArc} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} L ${x3.toFixed(2)} ${y3.toFixed(2)} A ${rIn} ${rIn} 0 ${largeArc} 0 ${x4.toFixed(2)} ${y4.toFixed(2)} Z`;
+  }
+
+  /** 环形图：entries=[{label,value,color}]，支持扇区 hover 提示 */
   function donutChart(donutEl, legendEl, centerEl, entries, centerText) {
     if (!donutEl) return;
     const total = entries.reduce((a, e) => a + Math.max(e.value, 0), 0);
     if (centerEl) centerEl.textContent = centerText ? centerText(total) : fmtTok(total);
+    // 保留中心文字元素
+    const centerDiv = donutEl.querySelector(".donut-center");
+    donutEl.innerHTML = "";
+    donutEl.style.background = "transparent";
     if (!total) {
       donutEl.style.background = "var(--bg)";
       if (legendEl) legendEl.innerHTML = '<span class="muted">暂无数据</span>';
+      if (centerDiv) donutEl.appendChild(centerDiv);
       return;
     }
-    let acc = 0;
-    const stops = [];
-    const rows = [];
-    for (const e of entries) {
-      if (e.value <= 0) continue;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.style.cssText = "position:absolute;inset:0;width:100%;height:100%;";
+    let accAngle = 0;
+    const valid = entries.filter(e => e.value > 0);
+    for (const e of valid) {
       const pct = (e.value / total) * 100;
-      stops.push(e.color + " " + acc.toFixed(2) + "% " + (acc + pct).toFixed(2) + "%");
-      acc += pct;
-      rows.push(
-        `<div class="dl-row"><span class="dl-swatch" style="background:${e.color}"></span>` +
-        `<span class="dl-name" title="${esc(e.label)}">${esc(e.label)}</span>` +
-        `<span class="dl-num">${e.text != null ? e.text + " (" + pct.toFixed(1) + "%)" : fmtTok(e.value) + " (" + pct.toFixed(1) + "%)"}</span></div>`
-      );
+      const angle = (e.value / total) * 360;
+      const endAngle = accAngle + angle;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", arcPath(50, 50, 33, 48, accAngle, endAngle));
+      path.setAttribute("fill", e.color);
+      path.setAttribute("stroke", "var(--panel)");
+      path.setAttribute("stroke-width", "0.5");
+      path.style.cursor = "default";
+      path.style.transition = "opacity .15s";
+      // 悬浮提示定位在扇区中心上方，避免小扇区 tooltip 跑到远处
+      const midAngle = accAngle + angle / 2;
+      const toRad = a => (a - 90) * Math.PI / 180;
+      const r = (33 + 48) / 2;
+      const xPct = 50 + r * Math.cos(toRad(midAngle));
+      const yPct = 50 + r * Math.sin(toRad(midAngle));
+      const marker = document.createElement("div");
+      marker.style.cssText = `position:absolute;left:${xPct}%;top:${yPct}%;width:1px;height:1px;pointer-events:none;z-index:12;`;
+      const tip = document.createElement("div");
+      tip.className = "tip";
+      tip.style.cssText = "display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:11px;white-space:nowrap;z-index:12;box-shadow:0 4px 12px rgba(0,0,0,.3);pointer-events:none;";
+      tip.innerHTML = `<div class="t">${esc(e.label)}</div>¥${fmt.format(Math.round(e.value * 100) / 100)} (${pct.toFixed(1)}%)`;
+      marker.appendChild(tip);
+      donutEl.appendChild(marker);
+      // 给扇区加一个更大的透明热区，方便悬浮小扇区
+      const hitPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      hitPath.setAttribute("d", arcPath(50, 50, 26, 55, accAngle, endAngle));
+      hitPath.setAttribute("fill", "transparent");
+      hitPath.style.cursor = "default";
+      const show = () => { tip.style.display = "block"; path.style.opacity = "0.82"; };
+      const hide = () => { tip.style.display = "none"; path.style.opacity = "1"; };
+      path.addEventListener("mouseenter", show);
+      path.addEventListener("mouseleave", hide);
+      hitPath.addEventListener("mouseenter", show);
+      hitPath.addEventListener("mouseleave", hide);
+      svg.appendChild(path);
+      svg.appendChild(hitPath);
+      accAngle = endAngle;
     }
-    donutEl.style.background = "conic-gradient(" + stops.join(", ") + ")";
-    if (legendEl) legendEl.innerHTML = rows.join("");
+    donutEl.appendChild(svg);
+    if (centerDiv) donutEl.appendChild(centerDiv);
+    // 图例
+    if (legendEl) {
+      const rows = valid.map(e => {
+        const pct = (e.value / total) * 100;
+        return `<div class="dl-row"><span class="dl-swatch" style="background:${e.color}"></span>` +
+          `<span class="dl-name" title="${esc(e.label)}">${esc(e.label)}</span>` +
+          `<span class="dl-num">${e.text != null ? e.text + " (" + pct.toFixed(1) + "%)" : fmtTok(e.value) + " (" + pct.toFixed(1) + "%)"}</span></div>`;
+      });
+      legendEl.innerHTML = rows.join("");
+    }
   }
 
   return {

@@ -221,13 +221,12 @@
 
 /* ---------- Donut ---------- */
 .donut-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; min-width: 0; }
-.donut { width: 150px; height: 150px; border-radius: 50%; position: relative; background: var(--bg); flex: none; }
-.donut::after { content: ""; position: absolute; inset: 38px; border-radius: 50%; background: var(--panel); }
-.donut-center { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.donut { width: 150px; height: 150px; border-radius: 50%; position: relative; background: var(--bg); flex: none; overflow: hidden; }
+.donut-center { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
 .donut-center .dc-label { font-size: 11px; color: var(--text-2); margin-bottom: 2px; }
 .donut-center .dc-value { font-family: var(--mono); font-size: 20px; font-weight: 700; max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
 .donut-legend { display: flex; flex-direction: column; gap: 6px; min-width: 0; width: 100%; }
-.dl-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; font-size: 11px; color: var(--text-2); min-width: 0; }
+.dl-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px 12px; font-size: 11px; color: var(--text-2); min-width: 0; }
 .dl-swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .dl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dl-num { margin-left: auto; color: var(--text); font-family: var(--mono); font-weight: 500; white-space: nowrap; }

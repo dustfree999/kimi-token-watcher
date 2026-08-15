@@ -14,7 +14,6 @@ window.Views = (function () {
   const EV_PAGE = 20;     // 实时事件每页 20 条（设计稿）
   const PAGE10 = 10;      // 其余列表每页 10 条（设计稿）
   let evAll = false;      // 事件页：默认 60 条，true 最多 200
-  let htDays = 7;         // 历史页默认 7 天
   let evExpanded = new Set();
   let settingsInit = false;
   let lastSig = "";
@@ -88,7 +87,10 @@ window.Views = (function () {
     const sEl = document.getElementById("page-subtitle");
     if (sEl) sEl.textContent = t[1];
     window.scrollTo(0, 0);
-    if (current) renderView(current, range);
+    if (current) {
+      if (view === "overview") render(current);  // 概览由 render() 全权渲染，立即刷新
+      else renderView(current, range);
+    }
   }
   function currentView() { return state.view; }
   function dispatch(data, r) { renderView(data, r); }
@@ -504,7 +506,13 @@ window.Views = (function () {
   /* ---------- 件：历史统计 ---------- */
   function renderHistoryView(data) {
     const allDays = Object.values(data.days || {}).sort((a, b) => a.date.localeCompare(b.date));
-    const sliceDays = htDays === Infinity ? allDays : allDays.slice(-htDays);
+    // 历史窗口跟随顶部切换（今日=1 / 7天 / 30天）
+    const win = range === "today" ? 1 : range === "week" ? 7 : 30;
+    const sliceDays = allDays.slice(-win);
+    const hsSub = el("hs-cost-sub");
+    if (hsSub) hsSub.textContent = "近 " + win + " 天";
+    const htSub = el("ht-trend-sub");
+    if (htSub) htSub.textContent = "近 " + win + " 天 · 每日 Token 消耗";
     const costSum = sliceDays.reduce((a, d) => a + costOf(d), 0);
     const reqSum = sliceDays.reduce((a, d) => a + (d.requests || 0), 0);
     const callSum = sliceDays.reduce((a, d) => a + (d.calls || 0), 0);
@@ -535,7 +543,7 @@ window.Views = (function () {
     if (pages.history > totalPg) pages.history = totalPg;
     const slice2 = desc.slice((pages.history - 1) * PAGE10, pages.history * PAGE10);
     const rowsEl = el("ht-rows");
-    if (chg("ht" + pages.history + htDays, slice2.map(d => [d.date, totOf(d)]))) {
+    if (chg("ht" + pages.history + win, slice2.map(d => [d.date, totOf(d)]))) {
       rowsEl.innerHTML = "";
       if (!slice2.length) { rowsEl.innerHTML = '<div class="tt-empty">暂无记录</div>'; }
       else {
@@ -691,17 +699,6 @@ window.Views = (function () {
     // 事件页：查看全部
     const em = el("ev-more");
     if (em) em.addEventListener("click", () => { evAll = !evAll; if (current) renderView(current, range); });
-    // 历史页筛选
-    const hf = el("ht-filter");
-    if (hf) {
-      hf.addEventListener("click", (e) => {
-        const btn = e.target.closest("button[data-hdays]");
-        if (!btn) return;
-        htDays = btn.dataset.hdays === "all" ? Infinity : parseInt(btn.dataset.hdays, 10);
-        document.querySelectorAll("#ht-filter button").forEach(b => b.classList.toggle("active", b === btn));
-        if (current) renderView(current, range);
-      });
-    }
     // 设置页：定价表单
     const ps = el("set-price-save");
     if (ps) {

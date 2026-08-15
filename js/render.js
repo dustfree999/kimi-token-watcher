@@ -3,7 +3,7 @@
    渲染 + 定价弹窗
    依赖：全局 el/esc/keyOf/copyText/changed/fmtTok/fmtYi/fmtFull/
          costOf/totOf/peakRange/hourRateTrend（js/utils.js）、
-         current/range/prices/histDays/chartGranularity/autoFollow/
+         current/range/prices/chartGranularity/autoFollow/
          evFilter（js/data.js）
    ============================================================ */
 "use strict";
@@ -465,11 +465,10 @@ function renderHistory(data) {
   const days = data.days || {};
   const list = el("history-list");
   const allEntries = Object.values(days).sort((a, b) => b.date.localeCompare(a.date));
-  // 历史范围筛选（7/30/90 天或全部）
-  const entries = histDays === Infinity ? allEntries : allEntries.slice(0, histDays);
-  el("history-summary").textContent = histDays === Infinity
-    ? entries.length + " 天有记录"
-    : "近 " + histDays + " 天 · " + entries.length + " 天有记录";
+  // 历史范围跟随顶部切换（今日=1 / 7天 / 30天）
+  const win = range === "today" ? 1 : range === "week" ? 7 : 30;
+  const entries = allEntries.slice(0, win);
+  el("history-summary").textContent = "近 " + win + " 天 · " + entries.length + " 天有记录";
   // 数据未变化则跳过重建（局部更新）
   const hSig = entries.map(e => [e.date, e.inputOther, e.inputCacheRead, e.inputCacheCreation, e.output, e.calls, e.requests || 0]);
   if (!changed("history", hSig)) return;

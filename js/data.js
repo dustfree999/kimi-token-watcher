@@ -13,7 +13,6 @@ let current = null;
 let range = "today"; // today | week | month
 let prices = loadPrices();
 let autoFollow = true;       // 事件流是否自动跟随顶部（用户滚离顶部即暂停）
-let histDays = 30;           // 历史范围（天），Infinity 表示全部
 let chartGranularity = "hour"; // Token 使用趋势粒度：hour | day
 const evFilter = { scope: "all", model: "" }; // 事件流过滤：全部/主/子 + 模型
 

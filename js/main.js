@@ -2,7 +2,7 @@
    Kimi Code Token 监控 · 前端逻辑
    轮询 + 初始化 + setRange
    依赖：全局 el/esc/copyText/fmtTok（js/utils.js）、
-         current/range/prices/chartGranularity/autoFollow/histDays/
+         current/range/prices/chartGranularity/autoFollow/
          evFilter（js/data.js）、render/updateEventFollowHint（js/render.js）
    ============================================================ */
 "use strict";
@@ -59,15 +59,6 @@ function setRange(r, btn) {
 
 /* ---------- 初始化 ---------- */
 document.addEventListener("DOMContentLoaded", () => {
-  // 历史范围筛选（7/30/90 天或全部）
-  el("history-filter").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-hdays]");
-    if (!btn) return;
-    histDays = btn.dataset.hdays === "all" ? Infinity : parseInt(btn.dataset.hdays, 10);
-    document.querySelectorAll("#history-filter button").forEach(b => b.classList.toggle("active", b === btn));
-    if (current) render(current);
-  });
-
   // Token 使用趋势粒度切换（按小时 / 按天）
   el("chart-filter").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-gran]");
