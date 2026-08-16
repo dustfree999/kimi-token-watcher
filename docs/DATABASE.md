@@ -23,8 +23,10 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 | `recent` | 实时事件流 | ≤ 500 条（自动裁剪） |
 | `seen_usage` | usage 记录去重指纹（含来源） | ≤ 20k（30 天保留） |
 | `seen_req` | request 记录去重指纹（含来源） | ≤ 20k（30 天保留） |
+| `seen_turn` | turn.ended 失败回合去重指纹（含来源） | ≤ 20k（30 天保留） |
 | `seen_usage_g` | usage 全局兜底指纹 | 同上 |
 | `seen_req_g` | request 全局兜底指纹 | 同上 |
+| `seen_turn_g` | turn.ended 失败回合全局兜底指纹 | 同上 |
 
 > 所有表的建表 DDL 均带注释，可在 Navicat 中查看（右键表 → 对象信息 / DDL）。
 
@@ -34,11 +36,14 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 
 | 列 | 说明 |
 |---|---|
-| `key` | 键名，取值：`tracked_files`、`session_meta`、`last_text`、`recent_seq`、`last_scan_time`、`scan_errors` |
+| `key` | 键名，取值：`tracked_files`、`session_meta`、`last_text`、`last_model`、`fails`、`recent_seq`、`last_scan_time`、`scan_errors` |
 | `value` | JSON 字符串值 |
 
 - `tracked_files`：各 wire.jsonl 已读字节偏移（增量扫描断点）
 - `session_meta`：会话元数据（标题、cwd、是否自定义等）
+- `last_text`：各 wire 最近输入/输出文本
+- `last_model`：各 wire 最近一次 `llm.request` 的模型名（`turn.ended` 失败回合归属用）
+- `fails`：失败回合明细缓冲（最多 300 条，含 time/date/model/session/scope/err_code/err_msg），供模型详情等页面回溯历史失败
 - `recent_seq`：实时事件流下一个可用 eventId
 - `scan_errors`：最近采集告警（最多 10 条）
 
@@ -60,7 +65,8 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
   "output": 1050489,           // 输出 tokens
   "calls": 444,                // turn 级调用次数
   "requests": 397,             // step 级请求次数
-  "by_model": { "模型名": { "model": "...", "inputOther": ..., "output": ... } },
+  "failed": 0,                 // 失败回合次数（turn.ended reason=failed，仅该层级有）
+  "by_model": { "模型名": { "model": "...", "inputOther": ..., "output": ..., "failed": ... } },
   "by_session": { "会话id": { "session": "...", "has_main": true, "has_sub": false,
                               "by_model": {...}, "hourly": {"9": {...}} } },
   "by_scope": { "main": { "scope": "main", "by_model": {...} },
@@ -71,6 +77,7 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 
 - 各小时槽的键是**字符串**（`"9"`、`"23"`），不是数字
 - `has_main` / `has_sub`：会话是否包含主/子智能体记录（旧数据可能缺失，前端兼容显示「主」）
+- `failed` 计数器加在 6 个层级：日顶层、`by_model[m]`、`by_session[s]`、`by_session[s].by_model[m]`、`by_scope[sc]`、`by_scope[sc].by_model[m]`；**hourly 不加**。旧存档可能缺失该键，前端与代码需按缺省 0 处理
 
 ### 3.3 `recent` — 实时事件流
 
@@ -82,19 +89,25 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 | `model` | 模型名 |
 | `session` | 会话 id |
 | `scope` | `main` = 主智能体，`subagent` = 子智能体 |
-| `input` / `cached` / `output` / `total` | 输入未命中 / 缓存命中 / 输出 / 合计 tokens |
+| `input` / `cached` / `output` / `total` | 输入未命中 / 缓存命中 / 输出 / 合计 tokens（失败事件恒为 0） |
 | `input_text` / `output_text` | 最近输入/输出文本（事件行展开查看用） |
+| `kind` | 事件类型：`usage`（用量）/ `failed`（失败回合），缺省 `usage` |
+| `err_code` / `err_msg` | 失败事件的错误码 / 错误信息（截断 300 字符），非失败事件为空串 |
 
-### 3.4 去重指纹表（`seen_usage` / `seen_req` / `seen_usage_g` / `seen_req_g`）
+> 早期版本建的库没有 `kind`/`err_code`/`err_msg` 三列，服务启动时自动 `ALTER TABLE` 补齐（默认 `kind='usage'`、错误列为空串），无需手动处理。
+
+### 3.4 去重指纹表（`seen_usage` / `seen_req` / `seen_turn` / `seen_usage_g` / `seen_req_g` / `seen_turn_g`）
 
 防止 fork 会话、多会话同记录重复计数的三层防线，对应内存中的集合：
 
 | 表 | 指纹组成 | 用途 |
 |---|---|---|
-| `seen_usage` | `(ts, src, model, i, o, c, cc)` | 主指纹（含来源路径，区分不同会话/Agent） |
+| `seen_usage` | `(ts, src, model, i, o, c, cc)` | usage 主指纹（含来源路径，区分不同会话/Agent） |
 | `seen_req` | `(ts, src, model, turnStep)` | request 主指纹（`turnStep` 为字符串） |
-| `seen_usage_g` | `(ts, model, i, o, c, cc)` | 全局兜底（不含来源，仅用于 >10 分钟的历史回放） |
+| `seen_turn` | `(ts, src, turnId)` | turn.ended 失败回合主指纹（`turnId` 为回合 id） |
+| `seen_usage_g` | `(ts, model, i, o, c, cc)` | usage 全局兜底（不含来源，仅用于 >10 分钟的历史回放） |
 | `seen_req_g` | `(ts, model)` | request 全局兜底 |
+| `seen_turn_g` | `(ts, turnId)` | turn.ended 失败回合全局兜底 |
 
 ## 4. 数据流
 
@@ -102,10 +115,10 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 ~/.kimi-code/sessions/**/agents/*/wire.jsonl
         │  collector 线程每 2 秒增量扫描（按 tracked_files 偏移）
         ▼
-  解析 usage.record / llm.request 事件
-        │  去重指纹校验（SEEN 四表）→ 通过则计数
+  解析 usage.record / llm.request / turn.ended(reason=failed) 事件
+        │  去重指纹校验（SEEN 六表）→ 通过则计数
         ▼
-  内存 STATE（days / recent / ...）
+  内存 STATE（days / recent / last_model / ...）
         │  save_state：每 30 秒 / Ctrl+C 时，单事务全量同步
         ▼
   data.db（WAL 模式，事务原子）
@@ -121,6 +134,7 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 |---|---|
 | `days` | 最多 90 天，超出自动裁剪 |
 | `recent` | 最多 500 条，超出丢弃最旧 |
+| `fails`（meta 键） | 最多 300 条，超出丢弃最旧 |
 | `seen_*` | 指纹保留 30 天；任一集合超 2 万条即触发裁剪 |
 | `scan_errors` | 最多 10 条 |
 
@@ -135,6 +149,9 @@ python -c "import sqlite3,json; c=sqlite3.connect('data.db'); d=json.loads(c.exe
 
 # 最近 10 条实时事件（按时间倒序）
 python -c "import sqlite3; c=sqlite3.connect('data.db'); print(c.execute('SELECT datetime(time/1000,\"unixepoch\",\"localtime\"), scope, model, total FROM recent ORDER BY time DESC LIMIT 10').fetchall())"
+
+# 只看失败回合事件（含错误码）
+python -c "import sqlite3; c=sqlite3.connect('data.db'); print(c.execute('SELECT count(*), kind, err_code FROM recent WHERE kind=\"failed\" GROUP BY err_code').fetchall())"
 
 # 只看子智能体事件
 python -c "import sqlite3; c=sqlite3.connect('data.db'); print(c.execute('SELECT count(*) FROM recent WHERE scope=\"subagent\"').fetchone())"
@@ -154,7 +171,7 @@ for date, data in c.execute('SELECT date, data FROM days ORDER BY date DESC LIMI
 
 1. 打开 Navicat（Premium 或 Navicat for SQLite）→ **连接 → SQLite**
 2. 数据库文件选择 `D:\coding\my-project\ppt\kimi-token-watcher\data.db`
-3. 连接后展开可见 7 张表，双击查看数据
+3. 连接后展开可见 9 张表，双击查看数据
 4. 查看表注释/DDL：右键表 → 对象信息（或「打开表」的 SQL 预览）
 5. `days.data`、`meta.value` 是 JSON 列，可在 Navicat 中直接复制到编辑器格式化查看
 

@@ -4,8 +4,8 @@
 Kimi Code Token 实时监控 —— 增量扫描与采集循环
 ==============================================
 扫描 sessions/**/agents/*/wire.jsonl 的新追加行，解析 usage.record /
-llm.request 事件并调用 aggregate.apply_record / apply_request 累加，
-同时维护文本跟踪、会话元数据、启动回放与后台采集线程逻辑。
+llm.request / turn.ended 事件并调用 aggregate.apply_record / apply_request /
+apply_turn_end 累加，同时维护文本跟踪、会话元数据、启动回放与后台采集线程逻辑。
 共享状态统一经 `state.` 引用（同一对象，见 state 模块）。
 """
 
@@ -17,7 +17,7 @@ import re
 import time
 
 import state
-from aggregate import apply_record, apply_request
+from aggregate import apply_record, apply_request, apply_turn_end
 
 SESSION_ID_RE = re.compile(r"[/\\](session_[0-9a-f-]+|ses_[0-9a-f-]+)[/\\]")
 
@@ -203,10 +203,24 @@ def scan_once():
                     obj["session_id"] = session_id_of(path)
                     obj["scope"] = scope_of(path)
                     obj["src"] = path  # 来源 wire 文件绝对路径，用于去重指纹区分会话/Agent
+                    # 记录该 wire 最近一次 llm.request 的模型名，供 turn.ended
+                    # 失败回合归属（turn.ended 事件本身没有 model 字段）
+                    with state.LOCK:
+                        state.STATE["last_model"][path] = (
+                            obj.get("modelAlias") or obj.get("model") or "(unknown)")
                     try:
                         apply_request(obj)
                     except Exception as e:
                         state.add_error(f"{os.path.basename(path)}: request: {e}")
+                elif etype == "turn.ended":
+                    obj["session_id"] = session_id_of(path)
+                    obj["scope"] = scope_of(path)
+                    obj["src"] = path  # 来源 wire 文件绝对路径，用于去重指纹区分会话/Agent
+                    obj["input_text"] = slot["input"][-600:]
+                    try:
+                        apply_turn_end(obj)
+                    except Exception as e:
+                        state.add_error(f"{os.path.basename(path)}: turn_end: {e}")
         except FileNotFoundError:
             with state.LOCK:
                 state.STATE["tracked_files"].pop(path, None)
@@ -288,6 +302,10 @@ def warmup_text():
                 etype = obj.get("type")
                 if etype in ("turn.prompt", "context.append_message", "context.append_loop_event"):
                     _track_text(slot, etype, obj)
+                elif etype == "llm.request":
+                    # 顺带回填最近一次 llm.request 的模型名（供失败回合归属）
+                    state.STATE["last_model"][path] = (
+                        obj.get("modelAlias") or obj.get("model") or "(unknown)")
         except Exception:
             pass
 
@@ -295,7 +313,8 @@ def warmup_text():
 def boot_replay():
     """启动时：恢复偏移、days 与去重集合，重启后保持一致性。
     首次运行（无存档）则从头全量扫描一次（会统计历史全部）。"""
-    offsets, days, seen_usage, seen_req, seen_usage_g, seen_req_g, recent = state.load_state()
+    (offsets, days, seen_usage, seen_req, seen_usage_g, seen_req_g,
+     seen_turn, seen_turn_g, recent) = state.load_state()
     state.STATE["tracked_files"] = offsets
     # 原地替换去重集合内容：保持 state.SEEN_* 与各模块（aggregate 等）持有的
     # 引用为同一集合对象（若重新赋值，其他模块仍会看到空的旧集合）。
@@ -307,6 +326,10 @@ def boot_replay():
     state.SEEN_USAGE_G.update(seen_usage_g)
     state.SEEN_REQ_G.clear()
     state.SEEN_REQ_G.update(seen_req_g)
+    state.SEEN_TURN.clear()
+    state.SEEN_TURN.update(seen_turn)
+    state.SEEN_TURN_G.clear()
+    state.SEEN_TURN_G.update(seen_turn_g)
     state.prune_seen(force=True)  # 启动时清理一次过期的去重指纹
     if days:
         state.STATE["days"] = days

@@ -8,21 +8,21 @@ Kimi Code Token 实时监控 —— 共享状态与持久化
 `from state import ...` 或 `import state` 引用同一对象（注意可变对象引用：
 对集合/字典只做原地修改，不做整体替换，避免各模块引用分叉）。
 
-存储设计（data.db，7 张表）：
+存储设计（data.db，9 张表）：
     meta            小量杂项：tracked_files / session_meta / last_text /
-                    recent_seq / last_scan_time / scan_errors（各 JSON 化）
+                    last_model / recent_seq / last_scan_time / scan_errors（各 JSON 化）
     days            逐日聚合槽位（date 主键，整日槽位 JSON，含
                     by_model/by_session/by_scope/hourly 嵌套）
     recent          实时事件流（eventId 主键，细粒度列）
-    seen_usage / seen_req          主去重指纹（含来源 src）
-    seen_usage_g / seen_req_g      全局兜底去重指纹（不含 src）
+    seen_usage / seen_req / seen_turn         主去重指纹（含来源 src）
+    seen_usage_g / seen_req_g / seen_turn_g   全局兜底去重指纹（不含 src）
 每次操作开新连接，连接时执行 PRAGMA journal_mode=WAL 与
 PRAGMA synchronous=NORMAL；save_state 在锁内单事务全量同步。
 首次启动若同目录存在旧 data.json 则自动一次性迁移（见 _migrate_from_json）。
 
 模块结构：
     state.py     本模块：STATE / LOCK / SEEN_* / 常量 + 持久化
-    aggregate.py 聚合槽位与记录累加（apply_record / apply_request）
+    aggregate.py 聚合槽位与记录累加（apply_record / apply_request / apply_turn_end）
     collector.py 增量扫描解析与扫描循环
     server.py    入口 + HTTP 服务
 """
@@ -53,6 +53,8 @@ SEEN_USAGE = set()   # (time, src, model, inputOther, output, cacheRead, cacheCr
 SEEN_REQ = set()     # (time, src, model, turnStep)
 SEEN_USAGE_G = set()  # (time, model, inputOther, output, cacheRead, cacheCreation) 全局兜底
 SEEN_REQ_G = set()    # (time, model) 全局兜底
+SEEN_TURN = set()     # (time, src, turnId) turn.ended 失败回合指纹
+SEEN_TURN_G = set()   # (time, turnId) turn.ended 全局兜底
 
 # ---------------------------------------------------------------------------
 # 聚合状态
@@ -60,19 +62,23 @@ SEEN_REQ_G = set()    # (time, model) 全局兜底
 LOCK = threading.Lock()
 STATE = {
     # "days": { "2026-08-14": {date, inputOther, inputCacheRead, output,
-    #                          calls, by_model:{model:{...}}, by_session:{session:{...}},
+    #                          calls, requests, failed, by_model:{model:{...}},
+    #                          by_session:{session:{...}},
     #                          hourly:{0..23:{input, output, cached, calls}}} }
     "days": {},
-    "recent": [],  # 最近 usage 记录（实时事件流），最多保留 RECENT_LIMIT 条
+    "recent": [],  # 最近事件流（usage.record / turn.ended 失败），最多保留 RECENT_LIMIT 条
     "recent_seq": 0,  # recent 事件流递增 eventId（服务运行期内唯一）
+    "fails": [],  # 失败回合明细（模型详情等页面展示），最多保留 FAILS_LIMIT 条
     "session_meta": {},  # { session_id: {title, cwd, is_custom, last_prompt} }
     "last_text": {},  # path -> {"input": str, "output": str} 最近输入/输出文本
+    "last_model": {},  # path -> 最近一次 llm.request 的模型名（turn.ended 失败回合归属用）
     "last_scan_time": 0,
     "tracked_files": {},  # path -> offset (已读字节偏移)
     "scan_errors": [],
 }
 
 RECENT_LIMIT = 500
+FAILS_LIMIT = 300
 
 # 文件被截断/重建导致偏移重置为 0 时置位，collector 模块的 collector_loop
 # 每轮开头检查并立即存档。由 collector 通过 `state.TRUNCATED_FLAG` 读写，
@@ -105,7 +111,7 @@ def _init_db(conn):
       会被 SQLite 亲和性转成数值（0.8 / 0），重启后指纹失配导致去重失效。"""
     conn.execute("""CREATE TABLE IF NOT EXISTS meta (
         key   TEXT PRIMARY KEY,  -- 键名：tracked_files/session_meta/last_text/
-                                 --       recent_seq/last_scan_time/scan_errors
+                                 --       last_model/recent_seq/last_scan_time/scan_errors
         value TEXT               -- JSON 字符串值
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS days (
@@ -126,7 +132,10 @@ def _init_db(conn):
         output      INTEGER,              -- 输出 tokens
         total       INTEGER,              -- input+cached+output
         input_text  TEXT,                 -- 最近输入文本（点击行展开查看）
-        output_text TEXT                  -- 最近输出文本
+        output_text TEXT,                 -- 最近输出文本
+        kind        TEXT,                 -- 事件类型：usage（用量）/ failed（失败回合）
+        err_code    TEXT,                 -- 失败错误码（failed 事件，如 provider.api_error）
+        err_msg     TEXT                  -- 失败错误信息（failed 事件，截断 300 字符）
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS seen_usage (
         ts INTEGER,     -- 记录时间（毫秒）
@@ -159,6 +168,26 @@ def _init_db(conn):
         model TEXT,     -- 模型名
         PRIMARY KEY (ts, model)
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS seen_turn (
+        ts INTEGER,     -- 记录时间（毫秒）
+        src TEXT,       -- 来源 wire 文件绝对路径
+        turnId INTEGER, -- 会话内回合 id
+        PRIMARY KEY (ts, src, turnId)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS seen_turn_g (
+        ts INTEGER,     -- 记录时间（毫秒）
+        turnId INTEGER, -- 会话内回合 id
+        PRIMARY KEY (ts, turnId)
+    )""")
+    # 老库迁移：recent 表若缺 kind/err_code/err_msg 列（早期版本建的库）则逐列补齐。
+    # CREATE TABLE IF NOT EXISTS 不会给已有表加列，缺列会导致后续 INSERT 列数不匹配。
+    recent_cols = {r[1] for r in conn.execute("PRAGMA table_info(recent)")}
+    if "kind" not in recent_cols:
+        conn.execute("ALTER TABLE recent ADD COLUMN kind TEXT DEFAULT 'usage'")
+    if "err_code" not in recent_cols:
+        conn.execute("ALTER TABLE recent ADD COLUMN err_code TEXT DEFAULT ''")
+    if "err_msg" not in recent_cols:
+        conn.execute("ALTER TABLE recent ADD COLUMN err_msg TEXT DEFAULT ''")
 
 
 def _migrate_from_json(conn):
@@ -175,12 +204,14 @@ def _migrate_from_json(conn):
                           for date, day in (data.get("days") or {}).items()])
         conn.executemany(
             "INSERT OR REPLACE INTO recent (eventId, time, date, hour, model, "
-            "session, scope, input, cached, output, total, input_text, output_text) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "session, scope, input, cached, output, total, input_text, output_text, "
+            "kind, err_code, err_msg) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(r.get("eventId"), r.get("time"), r.get("date"), r.get("hour"),
               r.get("model"), r.get("session"), r.get("scope"),
               r.get("input"), r.get("cached"), r.get("output"), r.get("total"),
-              r.get("input_text") or "", r.get("output_text") or "")
+              r.get("input_text") or "", r.get("output_text") or "",
+              r.get("kind") or "usage", r.get("err_code") or "", r.get("err_msg") or "")
              for r in data.get("recent") or []])
         # seen 指纹按元组长度分流：7/4 元进主集合表，其余长度（旧格式 6/2 元）
         # 进全局兜底表 —— 与旧 load_state 按长度分流进全局集合的行为一致
@@ -203,6 +234,15 @@ def _migrate_from_json(conn):
                          "(ts, model, i, o, c, cc) VALUES (?,?,?,?,?,?)", t)
         for t in (tuple(x) for x in data.get("seen_req_g", [])):
             conn.execute("INSERT OR IGNORE INTO seen_req_g (ts, model) VALUES (?,?)", t)
+        for t in (tuple(x) for x in data.get("seen_turn", [])):
+            if len(t) == 3:
+                conn.execute("INSERT OR IGNORE INTO seen_turn "
+                             "(ts, src, turnId) VALUES (?,?,?)", t)
+            else:
+                conn.execute("INSERT OR IGNORE INTO seen_turn_g "
+                             "(ts, turnId) VALUES (?,?)", t)
+        for t in (tuple(x) for x in data.get("seen_turn_g", [])):
+            conn.execute("INSERT OR IGNORE INTO seen_turn_g (ts, turnId) VALUES (?,?)", t)
         # meta：旧 JSON 未持久化 recent_seq，取 recent 最大 eventId+1 续接
         max_eid = conn.execute(
             "SELECT COALESCE(MAX(eventId), -1) FROM recent").fetchone()[0]
@@ -210,6 +250,7 @@ def _migrate_from_json(conn):
             "tracked_files": data.get("tracked_files") or {},
             "session_meta": data.get("session_meta") or {},
             "last_text": data.get("last_text") or {},
+            "last_model": data.get("last_model") or {},
             "recent_seq": str(int(max_eid) + 1),
             "last_scan_time": str(data.get("last_scan_time", 0)),
             "scan_errors": data.get("scan_errors") or [],
@@ -246,15 +287,20 @@ def load_state():
             recent = []
             for row in conn.execute(
                     "SELECT eventId, time, date, hour, model, session, scope, "
-                    "input, cached, output, total, input_text, output_text "
+                    "input, cached, output, total, input_text, output_text, "
+                    "kind, err_code, err_msg "
                     "FROM recent ORDER BY eventId"):
                 (eventId, tm, date, hour, model, session, scope, inp,
-                 cached, out, total, input_text, output_text) = row
+                 cached, out, total, input_text, output_text,
+                 kind, err_code, err_msg) = row
                 recent.append({
                     "time": tm, "date": date, "hour": hour,
                     "model": model, "session": session, "scope": scope,
                     "input": inp, "cached": cached, "output": out,
                     "total": total, "eventId": eventId,
+                    "kind": kind or "usage",
+                    "err_code": err_code or "",
+                    "err_msg": err_msg or "",
                     "input_text": input_text or "",
                     "output_text": output_text or "",
                 })
@@ -266,6 +312,10 @@ def load_state():
                             conn.execute("SELECT ts, model, i, o, c, cc FROM seen_usage_g")}
             seen_req_g = {tuple(r) for r in
                           conn.execute("SELECT ts, model FROM seen_req_g")}
+            seen_turn = {tuple(r) for r in
+                         conn.execute("SELECT ts, src, turnId FROM seen_turn")}
+            seen_turn_g = {tuple(r) for r in
+                           conn.execute("SELECT ts, turnId FROM seen_turn_g")}
             meta = {}
             for key, value in conn.execute("SELECT key, value FROM meta"):
                 try:
@@ -273,19 +323,21 @@ def load_state():
                 except Exception:
                     meta[key] = None
             # meta 杂项组装回 STATE（boot_replay 未覆盖的字段在此恢复）；
-            # tracked_files 同时作为 7 元组首元素返回。
+            # tracked_files 同时作为 9 元组首元素返回。
             # 迁移期间 add_error 已追加的告警需保留，与存档中的 scan_errors 合并。
             saved_errors = list(STATE["scan_errors"])
             STATE["tracked_files"] = meta.get("tracked_files") or {}
             STATE["session_meta"] = meta.get("session_meta") or {}
             STATE["last_text"] = meta.get("last_text") or {}
+            STATE["last_model"] = meta.get("last_model") or {}
+            STATE["fails"] = meta.get("fails") or []
             STATE["recent_seq"] = int(meta.get("recent_seq") or 0)
             STATE["last_scan_time"] = float(meta.get("last_scan_time") or 0)
             STATE["scan_errors"] = (saved_errors + (meta.get("scan_errors") or []))[-10:]
             return (STATE["tracked_files"], days, seen_usage, seen_req,
-                    seen_usage_g, seen_req_g, recent)
+                    seen_usage_g, seen_req_g, seen_turn, seen_turn_g, recent)
     except Exception:
-        return {}, {}, set(), set(), set(), set(), []
+        return {}, {}, set(), set(), set(), set(), set(), set(), []
 
 
 def save_state():
@@ -313,6 +365,12 @@ def save_state():
                         ("seen_req_g", SEEN_REQ_G,
                          "INSERT OR REPLACE INTO seen_req_g "
                          "(ts, model) VALUES (?,?)"),
+                        ("seen_turn", SEEN_TURN,
+                         "INSERT OR REPLACE INTO seen_turn "
+                         "(ts, src, turnId) VALUES (?,?,?)"),
+                        ("seen_turn_g", SEEN_TURN_G,
+                         "INSERT OR REPLACE INTO seen_turn_g "
+                         "(ts, turnId) VALUES (?,?)"),
                     )
                     for name, source, sql in tables:
                         conn.execute(f"DELETE FROM {name}")
@@ -326,17 +384,22 @@ def save_state():
                     conn.execute("DELETE FROM recent")
                     conn.executemany(
                         "INSERT OR REPLACE INTO recent (eventId, time, date, hour, model, "
-                        "session, scope, input, cached, output, total, input_text, output_text) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "session, scope, input, cached, output, total, input_text, output_text, "
+                        "kind, err_code, err_msg) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         [(r.get("eventId"), r.get("time"), r.get("date"), r.get("hour"),
                           r.get("model"), r.get("session"), r.get("scope"),
                           r.get("input"), r.get("cached"), r.get("output"), r.get("total"),
-                          r.get("input_text") or "", r.get("output_text") or "")
+                          r.get("input_text") or "", r.get("output_text") or "",
+                          r.get("kind") or "usage", r.get("err_code") or "",
+                          r.get("err_msg") or "")
                          for r in STATE["recent"]])
                     meta = {
                         "tracked_files": STATE["tracked_files"],
                         "session_meta": STATE["session_meta"],
                         "last_text": STATE["last_text"],
+                        "last_model": STATE["last_model"],
+                        "fails": STATE["fails"],
                         "recent_seq": str(STATE["recent_seq"]),
                         "last_scan_time": str(STATE["last_scan_time"]),
                         "scan_errors": STATE["scan_errors"],
@@ -362,9 +425,12 @@ def prune_seen(force=False):
     now = time.time() * 1000
     with LOCK:
         if (force or len(SEEN_USAGE) > 20000 or len(SEEN_REQ) > 20000
-                or len(SEEN_USAGE_G) > 20000 or len(SEEN_REQ_G) > 20000):
+                or len(SEEN_USAGE_G) > 20000 or len(SEEN_REQ_G) > 20000
+                or len(SEEN_TURN) > 20000 or len(SEEN_TURN_G) > 20000):
             cutoff = now - SEEN_RETENTION_MS
             SEEN_USAGE.intersection_update({fp for fp in SEEN_USAGE if fp[0] >= cutoff})
             SEEN_REQ.intersection_update({fp for fp in SEEN_REQ if fp[0] >= cutoff})
             SEEN_USAGE_G.intersection_update({fp for fp in SEEN_USAGE_G if fp[0] >= cutoff})
             SEEN_REQ_G.intersection_update({fp for fp in SEEN_REQ_G if fp[0] >= cutoff})
+            SEEN_TURN.intersection_update({fp for fp in SEEN_TURN if fp[0] >= cutoff})
+            SEEN_TURN_G.intersection_update({fp for fp in SEEN_TURN_G if fp[0] >= cutoff})

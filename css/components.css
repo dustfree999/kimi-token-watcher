@@ -279,7 +279,7 @@
 }
 /* 表列模板 */
 .evt { grid-template-columns: 74px 40px minmax(120px, 1.5fr) 46px 52px 52px 52px 60px minmax(70px, 1fr) 30px; }
-.mot { grid-template-columns: minmax(140px, 1.6fr) 72px 62px 56px 72px 56px 50px 50px 66px; }
+.mot { grid-template-columns: minmax(140px, 1.6fr) 72px 62px 56px 72px 56px 50px 50px 44px 66px; }
 .sst { grid-template-columns: minmax(110px, 1.4fr) 34px 62px 60px 58px 72px 58px 50px 50px 30px; }
 .htt { grid-template-columns: 92px 70px 64px 64px 58px 62px 52px 52px 60px; }
 .cst { grid-template-columns: 92px 110px 100px 90px 100px; }

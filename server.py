@@ -118,6 +118,10 @@ def build_response():
             (dict(r) for r in state.STATE["recent"]),
             key=lambda r: r["time"], reverse=True
         )[:200]
+        fails = sorted(
+            (dict(r) for r in state.STATE["fails"]),
+            key=lambda r: r["time"], reverse=True
+        )
 
         # ---- 滚动窗口速率（tokens/分钟）：基于实时事件流 recent（500 条上限） ----
         now_ms = time.time() * 1000
@@ -189,6 +193,7 @@ def build_response():
         "week": week,
         "month": month,
         "recent": recent,
+        "fails": fails,
         "session_root": state.SESSION_ROOT,
         "rates": rates,
         "vs_yesterday": vs_yesterday,

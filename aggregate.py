@@ -3,9 +3,9 @@
 """
 Kimi Code Token 实时监控 —— 聚合槽位与记录累加
 ==============================================
-把 usage.record / llm.request 记录累加进共享 STATE（定义于 state 模块）。
-包含日期/小时解析（day_of / hour_of）与各维度聚合槽位（*_slot）、
-apply_record / apply_request。
+把 usage.record / llm.request / turn.ended(failed) 记录累加进共享 STATE
+（定义于 state 模块）。包含日期/小时解析（day_of / hour_of）与各维度聚合
+槽位（*_slot）、apply_record / apply_request / apply_turn_end。
 
 注意：is_fork_copy 定义于 collector 模块（元数据/扫描相关），此处通过
 函数内延迟导入引用，避免 aggregate <-> collector 的模块循环依赖。
@@ -14,8 +14,9 @@ apply_record / apply_request。
 import datetime
 import time
 
-from state import (LOCK, STATE, RECENT_LIMIT,
+from state import (LOCK, STATE, RECENT_LIMIT, FAILS_LIMIT,
                    SEEN_USAGE, SEEN_USAGE_G, SEEN_REQ, SEEN_REQ_G,
+                   SEEN_TURN, SEEN_TURN_G,
                    SEEN_OLD_THRESHOLD_MS)
 
 
@@ -44,7 +45,7 @@ def _slot(days, date):
         s = {
             "date": date,
             "inputOther": 0, "inputCacheRead": 0, "inputCacheCreation": 0,
-            "output": 0, "calls": 0, "requests": 0,
+            "output": 0, "calls": 0, "requests": 0, "failed": 0,
             "by_model": {}, "by_session": {}, "hourly": {},
             "by_scope": {},  # { "main": {...}, "subagent": {...} }
         }
@@ -57,7 +58,7 @@ def _scope_slot(s, scope):
     if x is None:
         x = {"scope": scope, "inputOther": 0, "inputCacheRead": 0,
              "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0,
-             "by_model": {}}
+             "failed": 0, "by_model": {}}
         s["by_scope"][scope] = x
     elif "by_model" not in x:
         # 兼容旧版 data.json：旧格式的 scope 槽位没有 by_model 键，
@@ -71,7 +72,8 @@ def _scope_model_slot(x, model):
     m = x["by_model"].get(model)
     if m is None:
         m = {"model": model, "inputOther": 0, "inputCacheRead": 0,
-             "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0}
+             "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0,
+             "failed": 0}
         x["by_model"][model] = m
     return m
 
@@ -80,7 +82,8 @@ def _model_slot(s, model):
     m = s["by_model"].get(model)
     if m is None:
         m = {"model": model, "inputOther": 0, "inputCacheRead": 0,
-             "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0}
+             "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0,
+             "failed": 0}
         s["by_model"][model] = m
     return m
 
@@ -90,7 +93,7 @@ def _session_slot(s, session):
     if x is None:
         x = {"session": session, "inputOther": 0, "inputCacheRead": 0,
              "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0,
-             "by_model": {}, "hourly": {}}
+             "failed": 0, "by_model": {}, "hourly": {}}
         s["by_session"][session] = x
     return x
 
@@ -99,7 +102,8 @@ def _session_model_slot(x, model):
     m = x["by_model"].get(model)
     if m is None:
         m = {"model": model, "inputOther": 0, "inputCacheRead": 0,
-             "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0}
+             "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0,
+             "failed": 0}
         x["by_model"][model] = m
     return m
 
@@ -236,6 +240,7 @@ def apply_record(rec):
             "input": int(other), "cached": int(cached), "output": int(out),
             "total": int(other + cached + out),
             "eventId": STATE["recent_seq"],
+            "kind": "usage",
             "input_text": rec.get("input_text") or "",
             "output_text": rec.get("output_text") or "",
         })
@@ -301,3 +306,93 @@ def apply_request(rec):
         hh["requests"] = hh.get("requests", 0) + 1
         sh = _session_hour_slot(x, h)
         sh["requests"] = sh.get("requests", 0) + 1
+
+
+def apply_turn_end(rec):
+    """把一条 turn.ended(failed) 事件累加到 STATE（调用失败统计）。
+    结构仿照 apply_record：锁内处理、fork 复制段跳过、三层指纹去重、
+    各层 failed 累加（hourly 不统计失败）、追加 recent 失败事件并裁剪。
+    只有 reason == "failed" 才统计（cancelled 为用户主动取消，不算失败）。"""
+    with LOCK:
+        if rec.get("reason") != "failed":
+            return
+
+        ts = rec.get("time") or time.time() * 1000
+        session = rec.get("session_id") or "(unknown)"
+
+        # fork 会话复制段跳过（同 usage.record）
+        # （延迟导入：is_fork_copy 定义于 collector 模块，避免模块循环依赖）
+        from collector import is_fork_copy
+        if is_fork_copy(session, ts):
+            return
+
+        # 指纹去重（三层防线，见 state 模块文件头注释）。turn.ended 本身无 model
+        # 字段，主指纹用 (ts, src, turnId)；老记录回放只查全局兜底 (ts, turnId)。
+        fp = (ts, rec.get("src") or "", rec.get("turnId"))
+        fp_g = (ts, rec.get("turnId"))
+        if time.time() * 1000 - ts > SEEN_OLD_THRESHOLD_MS:
+            if fp_g in SEEN_TURN_G:
+                return
+        else:
+            if fp in SEEN_TURN:
+                return
+            SEEN_TURN.add(fp)
+        SEEN_TURN_G.add(fp_g)  # 通过（被计数）的记录同时加入全局兜底集合
+
+        date = day_of(ts)
+        s = _slot(STATE["days"], date)
+        # 模型归属：turn.ended 无 model 字段，取该 wire 最近一次 llm.request 的模型
+        model = STATE["last_model"].get(rec.get("src") or "") or "(unknown)"
+        scope = rec.get("scope") or "main"
+
+        # 兼容旧存档缺键：一律用 .get(k, 0) + v 防御累加（hourly 不加 failed）
+        s["failed"] = s.get("failed", 0) + 1
+
+        sc = _scope_slot(s, scope)
+        sc["failed"] = sc.get("failed", 0) + 1
+        scm = _scope_model_slot(sc, model)
+        scm["failed"] = scm.get("failed", 0) + 1
+
+        m = _model_slot(s, model)
+        m["failed"] = m.get("failed", 0) + 1
+
+        x = _session_slot(s, session)
+        # 置位主/子会话标记，供前端区分主/子会话（缺失的键保持缺失）
+        if scope == "main":
+            x["has_main"] = True
+        else:
+            x["has_sub"] = True
+        x["failed"] = x.get("failed", 0) + 1
+        sm = _session_model_slot(x, model)
+        sm["failed"] = sm.get("failed", 0) + 1
+
+        err = rec.get("error") or {}
+        err_code = err.get("code") or ""
+        err_msg = (err.get("message") or "")[:300]
+
+        # 实时事件流：失败回合事件（input/cached/output/total 全为 0）
+        state_recent = STATE["recent"]
+        state_recent.append({
+            "time": int(ts), "date": date, "hour": hour_of(ts),
+            "model": model, "session": session, "scope": scope,
+            "input": 0, "cached": 0, "output": 0, "total": 0,
+            "eventId": STATE["recent_seq"],
+            "kind": "failed",
+            "err_code": err_code,
+            "err_msg": err_msg,
+            "input_text": rec.get("input_text") or "",
+            "output_text": "",
+        })
+        STATE["recent_seq"] = STATE.get("recent_seq", 0) + 1
+        if len(state_recent) > RECENT_LIMIT:
+            del state_recent[: len(state_recent) - RECENT_LIMIT]
+
+        # 失败明细缓冲（独立于 recent，供模型详情等页面回溯历史失败）
+        state_fails = STATE["fails"]
+        state_fails.append({
+            "time": int(ts), "date": date, "model": model,
+            "session": session, "scope": scope,
+            "err_code": err_code, "err_msg": err_msg,
+        })
+        if len(state_fails) > FAILS_LIMIT:
+            del state_fails[: len(state_fails) - FAILS_LIMIT]

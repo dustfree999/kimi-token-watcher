@@ -70,6 +70,12 @@ window.Views = (function () {
     }
     return out;
   }
+  /** 毫秒时间 → "MM-DD HH:mm:ss"（失败记录行用） */
+  function mmddTime(t) {
+    const d = new Date(t);
+    const p = n => String(n).padStart(2, "0");
+    return p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
 
   /* ---------- 视图切换 ---------- */
   function switchView(view, opts) {
@@ -139,11 +145,15 @@ window.Views = (function () {
 
   /* ---------- 视图：实时事件 ---------- */
   function renderEventsView(data) {
-    const evs = (data.recent || []).slice(0, evAll ? 200 : 60);
+    // 事件流跟随顶部范围筛选（今日=1 / 近 7 天 / 近 30 天）
+    const win = range === "today" ? 1 : range === "week" ? 7 : 30;
+    const rl = range === "today" ? "今日" : range === "week" ? "近 7 天" : "近 30 天";
+    const validKeys = new Set(dayList(data, win).map(x => x.key));
+    const evs = (data.recent || []).filter(e => validKeys.has(e.date)).slice(0, evAll ? 200 : 60);
     const countEl = el("event-count");
-    if (countEl) countEl.textContent = evs.length + " events";
+    if (countEl) countEl.textContent = evs.length + " events · " + rl;
     const hint = el("event-follow-hint");
-    if (hint) hint.textContent = "每 2 秒自动刷新 · 点击行展开详情";
+    if (hint) hint.textContent = "每 2 秒自动刷新 · 点击行展开详情 · " + rl;
     let shown = evs;
     if (evFilter.scope === "main") shown = shown.filter(e => e.scope !== "subagent");
     else if (evFilter.scope === "sub") shown = shown.filter(e => e.scope === "subagent");
@@ -163,7 +173,7 @@ window.Views = (function () {
     if (!rowsEl) return;
     const sigKey = "ev" + pages.events + "|" + evFilter.scope + "|" + evFilter.model + "|" + (evAll ? "A" : "B") + "|" +
       slice.map(e => keyOf(e)).join(",");
-    if (chg(sigKey, slice.map(e => [keyOf(e), e.scope, e.model, e.input, e.cached, e.output]))) {
+    if (chg(sigKey, slice.map(e => [keyOf(e), e.scope, e.model, e.input, e.cached, e.output, e.kind, e.err_code]))) {
       rowsEl.innerHTML = "";
       if (!slice.length) {
         rowsEl.innerHTML = '<div class="tt-empty">该过滤条件下暂无事件</div>';
@@ -181,11 +191,17 @@ window.Views = (function () {
           const meta = (data.session_meta || {})[ev.session] || {};
           const sTitle = sessionLabel(ev.session, meta) || shortSid(ev.session);
           const isOpen = evExpanded.has(key);
+          const isFailed = ev.kind === "failed";
+          const hasErr = isFailed && (ev.err_msg && String(ev.err_msg).trim());
           const detail = document.createElement("div");
           detail.className = "tt-detail" + (isOpen ? "" : " hidden");
-          const hasText = (ev.input_text && ev.input_text.trim()) || (ev.output_text && ev.output_text.trim());
+          const hasText = hasErr || (ev.input_text && ev.input_text.trim()) || (ev.output_text && ev.output_text.trim());
           if (hasText) {
             let h = "";
+            if (hasErr) {
+              if (ev.err_code) h += `<div class="evd-label">错误码</div><div class="evd-text">${esc(ev.err_code)}</div>`;
+              h += `<div class="evd-label">错误信息</div><div class="evd-text">${esc(ev.err_msg)}</div>`;
+            }
             if (ev.input_text && ev.input_text.trim()) h += `<div class="evd-label">输入</div><div class="evd-text">${esc(ev.input_text)}</div>`;
             if (ev.output_text && ev.output_text.trim()) h += `<div class="evd-label">输出</div><div class="evd-text">${esc(ev.output_text)}</div>`;
             h += '<div class="evd-copybar">';
@@ -203,19 +219,27 @@ window.Views = (function () {
               });
             });
           } else {
-            detail.innerHTML = '<div class="evd-empty">该事件未捕获输入/输出文本</div>';
+            detail.innerHTML = isFailed
+              ? '<div class="evd-empty">该事件无错误信息</div>'
+              : '<div class="evd-empty">该事件未捕获输入/输出文本</div>';
           }
+          // 类型徽标：usage 绿色 / 失败红色
+          const typeBadge = isFailed
+            ? '<span class="lbl" style="color:var(--err);background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.3);padding:1px 7px;border-radius:999px">失败</span>'
+            : '<span class="lbl" style="color:var(--ok);background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:1px 7px;border-radius:999px">usage</span>';
           const row = document.createElement("div");
           row.className = "tt-row evt";
           row.innerHTML =
             `<span class="tt-num" style="color:var(--muted)">${esc(String(new Date(ev.time).toTimeString().slice(0, 8)))}</span>` +
-            `<span><span class="lbl" style="color:var(--ok);background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:1px 7px;border-radius:999px">usage</span></span>` +
+            `<span>${typeBadge}</span>` +
             `<span class="tt-name" style="cursor:default" title="${esc(ev.model)}">${esc(modelLabel(ev.model))}</span>` +
             `<span><span class="ev-scope ${scope}">${scope === "sub" ? "子" : "主"}</span></span>` +
-            `<span class="tt-num">${fmtTok(ev.input)}</span>` +
-            `<span class="tt-num">${fmtTok(ev.cached)}</span>` +
-            `<span class="tt-num" style="color:var(--out)">${fmtTok(ev.output)}</span>` +
-            `<span class="tt-num">${fmtTok(ev.total)}</span>` +
+            `<span class="tt-num">${isFailed ? "—" : fmtTok(ev.input)}</span>` +
+            `<span class="tt-num">${isFailed ? "—" : fmtTok(ev.cached)}</span>` +
+            (isFailed
+              ? `<span class="tt-num">—</span>`
+              : `<span class="tt-num" style="color:var(--out)">${fmtTok(ev.output)}</span>`) +
+            `<span class="tt-num">${isFailed ? "—" : fmtTok(ev.total)}</span>` +
             `<span class="tt-name" style="cursor:default" title="${esc(meta.cwd || "")} · ${esc(ev.session)}">${esc(sTitle)}</span>` +
             `<span class="tt-exp" title="展开详情">${hasText ? (isOpen ? "▲" : "▼") : "—"}</span>`;
           row.appendChild(detail);
@@ -254,7 +278,7 @@ window.Views = (function () {
     if (pages.models > totalPg) pages.models = totalPg;
     const slice = models.slice((pages.models - 1) * PAGE10, pages.models * PAGE10);
     const rowsEl = el("mo-rows");
-    if (chg("mo" + pages.models, slice.map(m => [m.model, totOf(m)]))) {
+    if (chg("mo" + pages.models, slice.map(m => [m.model, totOf(m), m.failed || 0]))) {
       rowsEl.innerHTML = "";
       if (!slice.length) {
         rowsEl.innerHTML = '<div class="tt-empty">暂无记录</div>';
@@ -264,7 +288,7 @@ window.Views = (function () {
         head.innerHTML =
           `<span>模型</span><span class="tt-num">输入 Tokens</span><span class="tt-num">缓存命中</span>` +
           `<span class="tt-num">输出 Tokens</span><span class="tt-num">总 Tokens</span><span class="tt-num">命中率</span>` +
-          `<span class="tt-num">请求数</span><span class="tt-num">回合数</span><span class="tt-num">费用预估</span>`;
+          `<span class="tt-num">请求数</span><span class="tt-num">回合数</span><span class="tt-num">失败</span><span class="tt-num">费用预估</span>`;
         rowsEl.appendChild(head);
         for (const m of slice) {
           const r = document.createElement("div");
@@ -278,6 +302,7 @@ window.Views = (function () {
             `<span class="tt-num ${cacheRateOf(m) != null ? hitCls(cacheRateOf(m)) : ""}">${cacheRateOf(m) != null ? cacheRateOf(m).toFixed(1) + "%" : "—"}</span>` +
             `<span class="tt-num">${fmt.format(m.requests || 0)}</span>` +
             `<span class="tt-num">${fmt.format(m.calls || 0)}</span>` +
+            `<span class="tt-num${(m.failed || 0) > 0 ? " pct-bad" : ""}">${m.failed || 0}</span>` +
             `<span class="tt-num ${costCls(costOf(m))}">¥${costOf(m).toFixed(2)}</span>`;
           r.querySelector(".tt-name").addEventListener("click", () => switchView("model-detail", { model: m.model }));
           rowsEl.appendChild(r);
@@ -342,6 +367,37 @@ window.Views = (function () {
             `<span class="tt-num">${fmtTok(t)} · ¥${costOf(sm).toFixed(2)}</span>`;
           r.querySelector(".tt-name").addEventListener("click", () => switchView("session-detail", { session: s.session }));
           srows.appendChild(r);
+        }
+      }
+    }
+    // 失败记录（当前范围，最多 20 条，倒序；数据源为独立失败缓冲 data.fails）
+    const fKeys = new Set(dayList(data, win).map(x => x.key));
+    const fails = (data.fails || [])
+      .filter(e => e.model === model && fKeys.has(e.date))
+      .sort((a, b) => b.time - a.time)
+      .slice(0, 20);
+    const failSub = el("md-fail-sub");
+    if (failSub) failSub.textContent = `近 ${win} 天 · ${fails.length} 次`;
+    const fr = el("md-fail-rows");
+    if (chg("mdfail" + win, fails.map(e => [e.time, e.err_code, e.err_msg]))) {
+      fr.innerHTML = "";
+      if (!fails.length) {
+        fr.innerHTML = '<div class="tt-empty">该模型在选定范围内无失败记录</div>';
+      } else {
+        const head = document.createElement("div");
+        head.className = "tt-head";
+        head.style.gridTemplateColumns = "130px 150px minmax(160px, 1fr)";
+        head.innerHTML = `<span>时间</span><span>错误码</span><span>错误信息</span>`;
+        fr.appendChild(head);
+        for (const e of fails) {
+          const r = document.createElement("div");
+          r.className = "tt-row";
+          r.style.gridTemplateColumns = "130px 150px minmax(160px, 1fr)";
+          r.innerHTML =
+            `<span class="tt-num" style="color:var(--muted)">${esc(mmddTime(e.time))}</span>` +
+            `<span class="tt-num" style="color:var(--muted)">${esc(e.err_code || "—")}</span>` +
+            `<span class="tt-name" style="cursor:default" title="${esc(e.err_msg || "")}">${esc(e.err_msg || "—")}</span>`;
+          fr.appendChild(r);
         }
       }
     }
