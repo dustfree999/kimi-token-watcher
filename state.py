@@ -85,6 +85,11 @@ FAILS_LIMIT = 300
 # 保证各模块持有同一对象（布尔值需以模块属性方式共享，而非重新赋值局部名）。
 TRUNCATED_FLAG = False
 
+# 历史失败回合回补标记：旧库升级到新版后，各 wire 的读取偏移已在末尾，
+# 增量扫描永远不会重读历史 turn.ended(failed)。首次启动时全量回扫一次，
+# 完成后置位并随 meta 持久化（键 turn_backfill_done），后续启动跳过。
+TURN_BACKFILL_DONE = False
+
 # 指纹去重集合只保留最近 30 天的记录（超过的不会再被 fork 复制段触发），控制内存
 SEEN_RETENTION_MS = 30 * 24 * 3600 * 1000
 
@@ -273,6 +278,7 @@ def load_state():
     """从 SQLite 恢复已读偏移、已聚合的 days、去重集合（重启后保持一致性）。
     首次启动且 data.json 存在时自动一次性迁移；数据损坏等异常回退为空状态
     （与旧版 except 行为一致）。seen 指纹按列存储天然区分主/全局集合，无需分流。"""
+    global TURN_BACKFILL_DONE
     try:
         first_run = not os.path.exists(DB_FILE)
         with sqlite3.connect(DB_FILE) as conn:
@@ -331,6 +337,7 @@ def load_state():
             STATE["last_text"] = meta.get("last_text") or {}
             STATE["last_model"] = meta.get("last_model") or {}
             STATE["fails"] = meta.get("fails") or []
+            TURN_BACKFILL_DONE = bool(meta.get("turn_backfill_done"))
             STATE["recent_seq"] = int(meta.get("recent_seq") or 0)
             STATE["last_scan_time"] = float(meta.get("last_scan_time") or 0)
             STATE["scan_errors"] = (saved_errors + (meta.get("scan_errors") or []))[-10:]
@@ -400,6 +407,7 @@ def save_state():
                         "last_text": STATE["last_text"],
                         "last_model": STATE["last_model"],
                         "fails": STATE["fails"],
+                        "turn_backfill_done": bool(TURN_BACKFILL_DONE),
                         "recent_seq": str(STATE["recent_seq"]),
                         "last_scan_time": str(STATE["last_scan_time"]),
                         "scan_errors": STATE["scan_errors"],

@@ -17,7 +17,7 @@ import re
 import time
 
 import state
-from aggregate import apply_record, apply_request, apply_turn_end
+from aggregate import apply_record, apply_request, apply_turn_end, apply_turn_end
 
 SESSION_ID_RE = re.compile(r"[/\\](session_[0-9a-f-]+|ses_[0-9a-f-]+)[/\\]")
 
@@ -310,6 +310,57 @@ def warmup_text():
             pass
 
 
+def backfill_turns():
+    """一次性回补：全量扫描所有 wire 的历史 turn.ended(failed)。
+    旧库升级到新版后，各 wire 的读取偏移已在末尾，增量扫描永远不会重读
+    历史失败事件；升级后首次启动全量回补一次（只补失败统计，不动用量/
+    请求计数；apply_turn_end 的三层去重保证与增量扫描不重复计数）。
+    完成后置 state.TURN_BACKFILL_DONE 并立即持久化，后续启动跳过。"""
+    if state.TURN_BACKFILL_DONE:
+        return
+    if not state.STATE["tracked_files"]:
+        # 全新安装（无存档）：boot_replay 的 scan_once 会从头全量扫描，
+        # 历史失败会一并统计，无需单独回补
+        state.TURN_BACKFILL_DONE = True
+        return
+    count = 0
+    for path in list_wires(state.SESSION_ROOT):
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+        text = raw.decode("utf-8", errors="replace")
+        for ln in text.split("\n"):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                obj = json.loads(ln)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            etype = obj.get("type")
+            if etype == "llm.request":
+                # 顺序扫描顺带记录最近请求模型，供当时失败回合的归属
+                state.STATE["last_model"][path] = (
+                    obj.get("modelAlias") or obj.get("model") or "(unknown)")
+            elif etype == "turn.ended" and obj.get("reason") == "failed":
+                obj["session_id"] = session_id_of(path)
+                obj["scope"] = scope_of(path)
+                obj["src"] = path
+                obj["input_text"] = ""  # 历史回补不还原当时输入文本
+                try:
+                    apply_turn_end(obj)
+                    count += 1
+                except Exception as e:
+                    state.add_error(f"backfill: {os.path.basename(path)}: {e}")
+    state.TURN_BACKFILL_DONE = True
+    state.save_state()
+    print(f"[kimi-token-watcher] 历史失败回合回补完成：扫描到 {count} 条 turn.ended(failed)")
+
+
 def boot_replay():
     """启动时：恢复偏移、days 与去重集合，重启后保持一致性。
     首次运行（无存档）则从头全量扫描一次（会统计历史全部）。"""
@@ -338,6 +389,7 @@ def boot_replay():
     state.STATE["recent"] = list(recent)
     state.STATE["recent_seq"] = max((r.get("eventId", 0) for r in recent), default=-1) + 1
     try:
+        backfill_turns()  # 一次性：旧库升级后回补历史失败回合（幂等，带标记）
         warmup_text()
         scan_once()
     except Exception as e:
