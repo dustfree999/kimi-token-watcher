@@ -68,11 +68,61 @@ function fmtYi(n) {
 }
 /** 完整数字（悬浮提示用） */
 function fmtFull(n) { return fmt.format(Math.round(n || 0)); }
-function costOf(d) {
-  return ((d.inputOther || 0) / 1e6) * prices.miss
-       + ((d.inputCacheRead || 0) / 1e6) * prices.cache
-       + ((d.inputCacheCreation || 0) / 1e6) * prices.cwrite
-       + ((d.output || 0) / 1e6) * prices.out;
+/* ---------- 计价 ---------- */
+/** 取某模型的计价（有按模型覆盖用覆盖，否则默认 prices） */
+function priceOf(model) {
+  const m = prices.models || {};
+  return (model != null && m[model]) || prices;
+}
+/** 单槽位计价：model 参数可选，给了则按该模型（覆盖或默认）计价 */
+function costOf(d, model) {
+  const p = model != null ? priceOf(model) : prices;
+  return ((d.inputOther || 0) / 1e6) * p.miss
+       + ((d.inputCacheRead || 0) / 1e6) * p.cache
+       + ((d.inputCacheCreation || 0) / 1e6) * p.cwrite
+       + ((d.output || 0) / 1e6) * p.out;
+}
+/** 混合槽位（日/会话）计价：有 by_model 时按各模型分别计价求和（精确），否则退回 costOf(d) */
+function costOfAgg(d) {
+  const bm = d.by_model;
+  if (bm && Object.keys(bm).length) {
+    let s = 0;
+    for (const m of Object.values(bm)) s += costOf(m, m.model);
+    return s;
+  }
+  return costOf(d);
+}
+const COST_CAT_COLORS = ["#f59e0b", "#3b82f6", "#ec4899", "#8b5cf6"];
+const COST_CAT_LABELS = ["输入未命中", "缓存命中", "缓存写入", "输出"];
+/** 四分类费用构成 [{label,value,color,key}]：model 给定按单模型计价；否则混合槽位按 by_model 分摊后汇总四类 */
+function costPartsOf(d, model) {
+  let miss = 0, cache = 0, cwrite = 0, out = 0;
+  if (model != null) {
+    const p = priceOf(model);
+    miss = ((d.inputOther || 0) / 1e6) * p.miss;
+    cache = ((d.inputCacheRead || 0) / 1e6) * p.cache;
+    cwrite = ((d.inputCacheCreation || 0) / 1e6) * p.cwrite;
+    out = ((d.output || 0) / 1e6) * p.out;
+  } else if (d.by_model && Object.keys(d.by_model).length) {
+    for (const m of Object.values(d.by_model)) {
+      const p = priceOf(m.model);
+      miss += ((m.inputOther || 0) / 1e6) * p.miss;
+      cache += ((m.inputCacheRead || 0) / 1e6) * p.cache;
+      cwrite += ((m.inputCacheCreation || 0) / 1e6) * p.cwrite;
+      out += ((m.output || 0) / 1e6) * p.out;
+    }
+  } else {
+    miss = ((d.inputOther || 0) / 1e6) * prices.miss;
+    cache = ((d.inputCacheRead || 0) / 1e6) * prices.cache;
+    cwrite = ((d.inputCacheCreation || 0) / 1e6) * prices.cwrite;
+    out = ((d.output || 0) / 1e6) * prices.out;
+  }
+  return [
+    { label: COST_CAT_LABELS[0], value: miss, color: COST_CAT_COLORS[0], key: "¥" + miss.toFixed(2) },
+    { label: COST_CAT_LABELS[1], value: cache, color: COST_CAT_COLORS[1], key: "¥" + cache.toFixed(2) },
+    { label: COST_CAT_LABELS[2], value: cwrite, color: COST_CAT_COLORS[2], key: "¥" + cwrite.toFixed(2) },
+    { label: COST_CAT_LABELS[3], value: out, color: COST_CAT_COLORS[3], key: "¥" + out.toFixed(2) },
+  ];
 }
 function totOf(d) { return (d.inputOther || 0) + (d.inputCacheRead || 0) + (d.output || 0); }
 function shortSid(s) {

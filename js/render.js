@@ -38,12 +38,14 @@ function render(data) {
     totalSub += `<br><span class="${up ? "trend-up" : "trend-down"}">较昨日 ${up ? "↑" : "↓"}${pct}%</span>`;
   }
   el("m-total-sub").innerHTML = totalSub;
-  el("m-cost").textContent = costOf(d).toFixed(2);
-  el("m-cost").title = "¥" + costOf(d).toFixed(4);
-  el("m-cost-sub").textContent = "输入 ¥" + ((d.inputOther/1e6)*prices.miss).toFixed(2) +
-    " · 缓存 ¥" + ((d.inputCacheRead/1e6)*prices.cache).toFixed(2) +
-    " · 缓存写 ¥" + ((d.inputCacheCreation/1e6)*prices.cwrite).toFixed(2) +
-    " · 输出 ¥" + ((d.output/1e6)*prices.out).toFixed(2);
+  const aggCost = costOfAgg(d);
+  el("m-cost").textContent = aggCost.toFixed(2);
+  el("m-cost").title = "¥" + aggCost.toFixed(4);
+  const cparts = costPartsOf(d);
+  el("m-cost-sub").textContent = "输入 ¥" + cparts[0].value.toFixed(2) +
+    " · 缓存 ¥" + cparts[1].value.toFixed(2) +
+    " · 缓存写 ¥" + cparts[2].value.toFixed(2) +
+    " · 输出 ¥" + cparts[3].value.toFixed(2);
   const inp = d.inputOther + d.inputCacheRead;
   el("m-cache").textContent = inp > 0 ? (d.inputCacheRead / inp * 100).toFixed(1) + "%" : "—";
   el("m-cache-sub").textContent = inp > 0
@@ -51,8 +53,12 @@ function render(data) {
     : "暂无输入";
   el("m-cache").title = inp > 0 ? `${fmtFull(d.inputCacheRead)} / ${fmtFull(inp)} tokens 输入缓存率` : "";
   el("m-calls").textContent = fmt.format(d.requests || d.calls);
-  el("m-calls").title = `${fmtFull(d.requests || 0)} 次请求 (step) · ${fmtFull(d.calls)} 回合 (turn)`;
-  el("m-calls-sub").textContent = "回合数 " + fmt.format(d.calls);
+  el("m-calls").title = `${fmtFull(d.requests || 0)} 次请求 (step) · ${fmtFull(d.calls)} 回合 (turn)` +
+    ((d.failed || 0) > 0 ? ` · ${fmtFull(d.failed)} 次失败` : "");
+  // 请求次数卡副行：回合数 · 失败次数（>0 红色）
+  const mFail = d.failed || 0;
+  el("m-calls-sub").innerHTML = "回合数 " + fmt.format(d.calls) +
+    (mFail > 0 ? ` · <span style="color:var(--err);font-weight:600">失败 ${fmt.format(mFail)}</span>` : "");
   // 峰值 / 速率（仅今日有意义）
   if (range === "today") {
     const peak = data.peak_hour;
@@ -464,13 +470,12 @@ function sessionLabel(sid, meta) {
 function renderHistory(data) {
   const days = data.days || {};
   const list = el("history-list");
-  const allEntries = Object.values(days).sort((a, b) => b.date.localeCompare(a.date));
-  // 历史范围跟随顶部切换（今日=1 / 7天 / 30天）
-  const win = range === "today" ? 1 : range === "week" ? 7 : 30;
-  const entries = allEntries.slice(0, win);
-  el("history-summary").textContent = "近 " + win + " 天 · " + entries.length + " 天有记录";
-  // 数据未变化则跳过重建（局部更新）
-  const hSig = entries.map(e => [e.date, e.inputOther, e.inputCacheRead, e.inputCacheCreation, e.output, e.calls, e.requests || 0]);
+  // 历史范围跟随顶部切换（今日=1 / 7天 / 30天 / 自定义）
+  const keys = rangeDayKeys(data);
+  const entries = keys.map(k => days[k]).filter(Boolean).reverse(); // 窗口内倒序
+  el("history-summary").textContent = rangeLabel() + " · " + entries.length + " 天有记录";
+  // 数据未变化则跳过重建（局部更新；费用纳入签名，定价变化也会刷新）
+  const hSig = entries.map(e => [e.date, e.inputOther, e.inputCacheRead, e.inputCacheCreation, e.output, e.calls, e.requests || 0, costOfAgg(e)]);
   if (!changed("history", hSig)) return;
   list.innerHTML = "";
   if (!entries.length) {
@@ -486,7 +491,7 @@ function renderHistory(data) {
     item.innerHTML =
       `<div class="history-date">${esc(e.date)}</div>` +
       `<div class="history-bar"><i style="width:${Math.max((tot / max) * 100, tot > 0 ? 3 : 0)}%"></i></div>` +
-      `<div class="history-num" title="输入 ${fmtFull(e.inputOther)} · 缓存 ${fmtFull(e.inputCacheRead)} · 输出 ${fmtFull(e.output)} · 回合 ${fmtFull(e.calls)} · 请求 ${fmtFull(e.requests || 0)}">${fmtTok(tot)} · ¥${costOf(e).toFixed(2)} · ${fmt.format(e.calls)} 回合</div>`;
+      `<div class="history-num" title="输入 ${fmtFull(e.inputOther)} · 缓存 ${fmtFull(e.inputCacheRead)} · 输出 ${fmtFull(e.output)} · 回合 ${fmtFull(e.calls)} · 请求 ${fmtFull(e.requests || 0)}">${fmtTok(tot)} · ¥${costOfAgg(e).toFixed(2)} · ${fmt.format(e.calls)} 回合</div>`;
     list.appendChild(item);
   }
 }
@@ -560,7 +565,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (current) render(current);
   });
   el("price-reset").addEventListener("click", () => {
-    prices = { ...DEFAULT_PRICES };
+    // 顶栏弹窗只恢复默认价，保留按模型定价覆盖（按模型定价请到设置页管理）
+    prices = { ...DEFAULT_PRICES, models: { ...(prices.models || {}) } };
     savePrices();
     el("pm-miss").value = prices.miss;
     el("pm-cache").value = prices.cache;

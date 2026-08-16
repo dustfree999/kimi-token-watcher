@@ -30,6 +30,8 @@ async function refresh() {
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const data = await resp.json();
     render(data);
+    // 告警通知检查（今日费用 / 失败次数超阈值）
+    if (window.Views && window.Views.checkAlerts) window.Views.checkAlerts(data);
   } catch (e) {
     const badge = el("conn-status");
     badge.querySelector(".dot").className = "dot err";
@@ -95,12 +97,53 @@ document.addEventListener("DOMContentLoaded", () => {
   el("range-switch").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-range]");
     if (!btn) return;
+    if (btn.dataset.range === "custom") { openCustomRange(); return; } // 自定义只弹日期选择，不改 range
     setRange(btn.dataset.range, btn);
   });
 
-  // 支持 URL ?range=week|month|today（便于直接分享/验证）
+  /* ---------- 自定义时间范围弹窗 ---------- */
+  function openCustomRange() {
+    el("cr-start").value = customRange.start || "";
+    el("cr-end").value = customRange.end || "";
+    el("cr-hint").textContent = "";
+    el("custom-range-overlay").classList.remove("hidden");
+  }
+  el("cr-apply").addEventListener("click", () => {
+    const s = el("cr-start").value, e = el("cr-end").value;
+    if (!s || !e) { el("cr-hint").textContent = "请选择开始与结束日期"; return; }
+    let st = s, en = e;
+    if (st > en) { const t = st; st = en; en = t; } // 防呆：交换
+    if (current && current.today && en > current.today) en = current.today; // end 不超过今日
+    customRange = { start: st, end: en };
+    el("custom-range-overlay").classList.add("hidden");
+    const cBtn = document.querySelector('#range-switch button[data-range="custom"]');
+    setRange("custom", cBtn); // 复用 setRange：激活态 + 粒度按钮禁用态一并处理
+  });
+  el("cr-cancel").addEventListener("click", () => el("custom-range-overlay").classList.add("hidden"));
+  el("custom-range-overlay").addEventListener("click", (e) => {
+    if (e.target === el("custom-range-overlay")) el("custom-range-overlay").classList.add("hidden");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (el("custom-range-overlay").classList.contains("hidden")) return;
+    if (e.key === "Escape") el("custom-range-overlay").classList.add("hidden");
+    else if (e.key === "Enter" && e.target && (e.target.id === "cr-start" || e.target.id === "cr-end")) {
+      e.preventDefault();
+      el("cr-apply").click();
+    }
+  });
+
+  // 支持 URL ?range=week|month|today|custom（custom 需 ?start=&end= 日期）
   const urlRange = new URLSearchParams(location.search).get("range");
-  if (urlRange && ["live", "today", "week", "month"].includes(urlRange)) {
+  if (urlRange === "custom") {
+    const qs = new URLSearchParams(location.search);
+    const st = qs.get("start"), en = qs.get("end");
+    if (st && en) {
+      customRange = { start: st, end: en };
+      range = "custom";
+      const btn = document.querySelector('#range-switch button[data-range="custom"]');
+      if (btn) btn.classList.add("active");
+    }
+  } else if (urlRange && ["live", "today", "week", "month"].includes(urlRange)) {
     const btn = document.querySelector(`#range-switch button[data-range="${urlRange}"]`);
     if (btn) setRange(urlRange, btn);
   }

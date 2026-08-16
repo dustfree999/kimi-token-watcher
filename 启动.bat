@@ -1,10 +1,11 @@
 @echo off
-title Kimi Code Token ¼à¿Ø
+chcp 65001 >nul
+title Kimi Code Token ç›‘æ§
 cd /d "%~dp0"
 
-echo ÕıÔÚÆô¶¯±¾µØ·şÎñ ...
-echo Èôä¯ÀÀÆ÷Î´×Ô¶¯´ò¿ª£¬ÇëÊÖ¶¯·ÃÎÊ http://127.0.0.1:8787
-echo °´ Ctrl+C ¿ÉÍ£Ö¹
+echo æ­£åœ¨å¯åŠ¨ Kimi Code Token ç›‘æ§ ...
+echo æ•°æ®æ ¹ï¼šC:\Users\%USERNAME%\.kimi-code\sessions
+echo çº¯æœ¬åœ°æœåŠ¡ï¼ŒæŒ‰ Ctrl+C é€€å‡º
 echo.
 
 start "" http://127.0.0.1:8787

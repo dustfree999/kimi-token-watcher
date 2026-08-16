@@ -5,12 +5,13 @@
 "use strict";
 
 const PRICE_KEY = "kimi_token_prices";
-const DEFAULT_PRICES = { miss: 1.0, cache: 0.02, cwrite: 0, out: 2.0 };
+const DEFAULT_PRICES = { miss: 1.0, cache: 0.02, cwrite: 0, out: 2.0, models: {} };
 const DAY_MS = 86400000;
 
 /* ---------- 跨文件共享状态（经典 script 全局作用域共享，render/main/views 均可读写） ---------- */
 let current = null;
-let range = "today"; // today | week | month
+let range = "today"; // today | week | month | custom
+let customRange = { start: null, end: null }; // 自定义范围（YYYY-MM-DD，含首尾）
 let prices = loadPrices();
 let autoFollow = true;       // 事件流是否自动跟随顶部（用户滚离顶部即暂停）
 let chartGranularity = "hour"; // Token 使用趋势粒度：hour | day
@@ -18,11 +19,14 @@ const evFilter = { scope: "all", model: "" }; // 事件流过滤：全部/主/�
 
 /* ---------- 定价 ---------- */
 function loadPrices() {
+  const base = { ...DEFAULT_PRICES, models: { ...DEFAULT_PRICES.models } }; // 深拷贝 models，避免污染默认模板
   try {
     const raw = localStorage.getItem(PRICE_KEY);
-    if (raw) return { ...DEFAULT_PRICES, ...JSON.parse(raw) };
+    if (raw) Object.assign(base, JSON.parse(raw));
   } catch (e) {}
-  return { ...DEFAULT_PRICES };
+  // 兼容旧格式：无 models 键（或为空）时补齐
+  if (!base.models || typeof base.models !== "object") base.models = {};
+  return base;
 }
 function savePrices() { localStorage.setItem(PRICE_KEY, JSON.stringify(prices)); }
 
@@ -30,7 +34,6 @@ function savePrices() { localStorage.setItem(PRICE_KEY, JSON.stringify(prices));
 function buildRangeData(data, granularity = chartGranularity) {
   const days = data.days || {};
   const today = data.today;
-  const todayDate = new Date(data.now * 1000);
 
   if (range === "today") {
     const day = days[today] || emptyDay(today);
@@ -47,26 +50,23 @@ function buildRangeData(data, granularity = chartGranularity) {
     };
   }
 
-  const nDays = range === "week" ? 7 : 31;
-  const dayBuckets = [];
-  for (let i = nDays - 1; i >= 0; i--) {
-    const d = new Date(todayDate.getTime() - i * DAY_MS);
-    const localKey = localDateKey(d);
-    const day = days[localKey] || emptyDay(localKey);
-    dayBuckets.push({ key: localKey, label: localKey.slice(5), day });
-  }
+  // week / month / custom：按日期键枚举（升序），口径统一走 rangeDayKeys
+  const keys = rangeDayKeys(data);
+  const dayBuckets = keys.map(k => ({ key: k, label: k.slice(5), day: days[k] || emptyDay(k) }));
   const agg = emptyDay("__agg__");
   for (const b of dayBuckets) mergeDay(agg, b.day);
+  const label = rangeLabel();
+  const title = label + (granularity === "day" ? (range === "custom" ? "日趋势" : "趋势") : "小时聚合");
 
   if (granularity === "day") {
     const buckets = dayBuckets.map(b => ({
       key: b.key, label: b.label, day: b.day,
       in: b.day.inputOther || 0, cache: b.day.inputCacheRead || 0, out: b.day.output || 0, req: b.day.requests || 0,
     }));
-    return { day: agg, buckets, title: range === "week" ? "近 7 天趋势" : "近 30 天趋势", label: range === "week" ? "近 7 天" : "近 30 天" };
+    return { day: agg, buckets, title, label };
   }
 
-  // hour granularity for week/month: aggregate hourly data across days
+  // hour granularity for week/month/custom: aggregate hourly data across days
   const hourly = new Array(24).fill(null).map((_, h) => ({
     key: h, label: String(h).padStart(2, "0"),
     in: 0, cache: 0, out: 0, req: 0,
@@ -81,7 +81,46 @@ function buildRangeData(data, granularity = chartGranularity) {
       hourly[h].req += hv.requests || 0;
     }
   }
-  return { day: agg, buckets: hourly, title: range === "week" ? "近 7 天小时聚合" : "近 30 天小时聚合", label: range === "week" ? "近 7 天" : "近 30 天" };
+  return { day: agg, buckets: hourly, title, label };
+}
+/** 当前 range 的日期键数组（升序）：today→[今日]；week→近7天；month→近30天；custom→start..end 闭区间 */
+function rangeDayKeys(data) {
+  const today = data.today;
+  if (range === "today") return [today];
+  if (range === "week" || range === "month") {
+    const n = range === "week" ? 7 : 30;
+    const nowMs = data.now != null ? data.now * 1000 : Date.now();
+    const out = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(nowMs - i * DAY_MS);
+      out.push(localDateKey(d));
+    }
+    return out;
+  }
+  // custom：start..end 逐日（防呆：start>end 交换、跨度上限 366 天、end 不超过今日）
+  let s = customRange.start, e = customRange.end;
+  if (!s || !e) return [today];
+  if (s > e) { const t = s; s = e; e = t; }
+  if (today && e > today) e = today;
+  const out = [];
+  const cur = new Date(s + "T00:00:00");
+  const end = new Date(e + "T00:00:00");
+  let guard = 0;
+  while (cur <= end && guard < 366) {
+    out.push(localDateKey(cur));
+    cur.setDate(cur.getDate() + 1);
+    guard++;
+  }
+  return out;
+}
+/** 当前范围的中文标签：今日 / 近 7 天 / 近 30 天 / MM-DD ~ MM-DD */
+function rangeLabel() {
+  if (range === "today") return "今日";
+  if (range === "week") return "近 7 天";
+  if (range === "month") return "近 30 天";
+  const s = customRange.start, e = customRange.end;
+  if (!s || !e) return "今日";
+  return s.slice(5) + " ~ " + e.slice(5);
 }
 function localDateKey(d) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), dd = String(d.getDate()).padStart(2, "0");

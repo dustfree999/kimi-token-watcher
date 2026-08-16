@@ -279,7 +279,7 @@
 }
 /* 表列模板 */
 .evt { grid-template-columns: 74px 40px minmax(120px, 1.5fr) 46px 52px 52px 52px 60px minmax(70px, 1fr) 30px; }
-.mot { grid-template-columns: minmax(140px, 1.6fr) 72px 62px 56px 72px 56px 50px 50px 44px 66px; }
+.mot { grid-template-columns: minmax(140px, 1.6fr) 72px 62px 56px 72px 56px 50px 50px 44px 52px 66px; }
 .sst { grid-template-columns: minmax(110px, 1.4fr) 34px 62px 60px 58px 72px 58px 50px 50px 30px; }
 .htt { grid-template-columns: 92px 70px 64px 64px 58px 62px 52px 52px 60px; }
 .cst { grid-template-columns: 92px 110px 100px 90px 100px; }
@@ -361,7 +361,46 @@
 .gs-row:last-of-type { border-bottom: none; }
 .gs-label { color: var(--text-2); font-size: 12.5px; }
 .gs-val { color: var(--muted); font-size: 11.5px; }
+.gs-val input {
+  width: 110px; background: var(--bg); border: 1px solid var(--bd); color: var(--text);
+  padding: 4px 8px; border-radius: 6px; font-size: 12px; text-align: right; font-family: var(--mono);
+}
+.gs-val input:focus { outline: none; border-color: var(--accent); }
+.al-switch { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12.5px; cursor: pointer; }
 .gs-actions { display: flex; gap: 10px; flex-wrap: wrap; padding-top: 10px; }
+
+/* ---------- 设置页：按模型定价 ---------- */
+.pm-block { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.pm-head { font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+.pm-head .muted { font-weight: 400; margin-left: 6px; }
+.pm-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.pm-row { display: grid; grid-template-columns: minmax(110px, 1fr) repeat(4, 74px) 26px; gap: 6px; align-items: center; }
+.pm-row input {
+  min-width: 0; background: var(--bg); border: 1px solid var(--bd); color: var(--text);
+  padding: 5px 8px; border-radius: 6px; font-size: 12px; font-family: var(--mono);
+}
+.pm-row input:focus { outline: none; border-color: var(--accent); }
+.pm-row .pm-name { text-align: left; }
+.pm-row input[type="number"] { text-align: right; }
+.pm-del {
+  background: transparent; border: none; color: var(--muted); cursor: pointer;
+  font-size: 13px; padding: 2px; border-radius: 4px; font-family: inherit;
+}
+.pm-del:hover { color: var(--err); }
+.pm-add { margin-top: 4px; }
+
+/* ---------- 告警 toast（页面右上角） ---------- */
+.toast-box {
+  position: fixed; top: 14px; right: 14px; z-index: 90;
+  display: flex; flex-direction: column; gap: 8px; max-width: 340px;
+}
+.toast {
+  background: var(--panel); border: 1px solid var(--err); border-left: 3px solid var(--err);
+  border-radius: 8px; padding: 10px 14px; font-size: 12px; line-height: 1.6; color: var(--text);
+  box-shadow: 0 8px 24px rgba(0,0,0,.45); transition: opacity .3s, transform .3s;
+}
+.toast .t { font-weight: 600; color: var(--err); margin-bottom: 2px; }
+.toast.out { opacity: 0; transform: translateX(8px); }
 
 /* ---------- 提示 / 页脚 ---------- */
 .hint-bar { text-align: center; color: var(--muted); font-size: 11px; padding: 14px 0 4px; }

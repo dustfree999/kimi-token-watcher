@@ -84,7 +84,7 @@
           <button data-range="today" class="active">今日</button>
           <button data-range="week">7天</button>
           <button data-range="month">30天</button>
-          <button data-range="custom" disabled>自定义</button>
+          <button data-range="custom">自定义</button>
         </div>
         <span class="refresh-hint" id="conn-status"><i class="dot ok"></i>自动刷新 · 2s</span>
         <button class="link-btn" id="refresh-now" title="手动刷新">刷新</button>
@@ -414,6 +414,12 @@
                 <button class="btn-ghost" id="set-price-reset">恢复默认</button>
                 <button class="btn" id="set-price-save">保存</button>
               </div>
+              <div class="pm-block">
+                <div class="pm-head">按模型定价（可选）<span class="muted">未设置的模型使用上方默认价</span></div>
+                <div class="pm-rows" id="pm-rows"></div>
+                <datalist id="pm-models"></datalist>
+                <div class="pm-add"><button class="btn-ghost" id="pm-add" type="button">+ 添加模型</button></div>
+              </div>
             </div>
           </section>
           <section class="panel">
@@ -434,15 +440,30 @@
             <div class="gs-row"><span class="gs-label">版本</span><span class="gs-val mono">v1.0.0 · 纯本地服务</span></div>
           </section>
           <section class="panel">
+            <div class="panel-head"><div class="pt"><h2>告警通知</h2></div></div>
+            <div class="gs-row"><span class="gs-label">启用通知</span>
+              <span class="gs-val"><label class="al-switch"><input type="checkbox" id="al-enabled"> 启用</label></span>
+            </div>
+            <div class="gs-row"><span class="gs-label">当日费用阈值</span>
+              <span class="gs-val"><input type="number" id="al-cost" step="0.01" min="0" placeholder="0"> 元</span>
+            </div>
+            <div class="gs-row"><span class="gs-label">当日失败次数阈值</span>
+              <span class="gs-val"><input type="number" id="al-fail" step="1" min="0" placeholder="0"> 次</span>
+            </div>
+            <p class="muted" style="margin:10px 0 0">超过阈值时浏览器通知 + 页面右上角提示，30 分钟内同类不重复提醒；阈值填 0 表示不触发。</p>
+          </section>
+          <section class="panel">
             <div class="panel-head"><div class="pt"><h2>数据管理</h2></div></div>
             <div class="gs-row"><span class="gs-label">数据源目录</span><span class="gs-val mono" id="gs-dir">~/.kimi-code/sessions</span></div>
             <div class="gs-row"><span class="gs-label">采集日志数</span><span class="gs-val mono" id="gs-files">—</span></div>
             <div class="gs-actions">
               <button class="btn btn-blue" id="export-config">导出配置</button>
+              <button class="btn btn-blue" id="export-daily-csv">导出按日 CSV</button>
+              <button class="btn btn-blue" id="export-models-csv">导出按模型 CSV</button>
               <button class="link-btn" id="open-dir2">打开数据目录</button>
               <button class="btn btn-danger" id="clear-local">清空本地数据</button>
             </div>
-            <p class="muted" style="margin:10px 0 0">“清空本地数据”仅清除浏览器中的定价等本地配置，不影响服务器 data.json 统计。</p>
+            <p class="muted" style="margin:10px 0 0">“清空本地数据”仅清除浏览器中的定价等本地配置，不影响服务器 data.db 统计。</p>
           </section>
         </div>
       </section>
@@ -465,9 +486,25 @@
     <label>输入（缓存命中）<input type="number" id="pm-cache" step="0.001" min="0"></label>
     <label>输入（缓存写入）<input type="number" id="pm-cwrite" step="0.001" min="0"></label>
     <label>输出<input type="number" id="pm-out" step="0.01" min="0"></label>
+    <p class="muted" style="margin:0 0 4px">按模型定价请到设置页。</p>
     <div class="modal-actions">
       <button class="btn-ghost" id="price-reset">恢复默认</button>
       <button class="btn" id="price-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 自定义时间范围弹窗（全局） -->
+<div class="overlay hidden" id="custom-range-overlay">
+  <div class="modal">
+    <h2>自定义时间范围</h2>
+    <p class="modal-sub">按本地日期选择起止日（含首尾，最多 366 天）</p>
+    <label>开始日期<input type="date" id="cr-start"></label>
+    <label>结束日期<input type="date" id="cr-end"></label>
+    <p class="muted" id="cr-hint" style="margin:0 0 4px"></p>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="cr-cancel">取消</button>
+      <button class="btn" id="cr-apply">应用</button>
     </div>
   </div>
 </div>

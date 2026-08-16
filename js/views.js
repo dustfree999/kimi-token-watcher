@@ -145,10 +145,9 @@ window.Views = (function () {
 
   /* ---------- 视图：实时事件 ---------- */
   function renderEventsView(data) {
-    // 事件流跟随顶部范围筛选（今日=1 / 近 7 天 / 近 30 天）
-    const win = range === "today" ? 1 : range === "week" ? 7 : 30;
-    const rl = range === "today" ? "今日" : range === "week" ? "近 7 天" : "近 30 天";
-    const validKeys = new Set(dayList(data, win).map(x => x.key));
+    // 事件流跟随顶部范围筛选（今日 / 近 7 天 / 近 30 天 / 自定义）
+    const rl = rangeLabel();
+    const validKeys = new Set(rangeDayKeys(data));
     const evs = (data.recent || []).filter(e => validKeys.has(e.date)).slice(0, evAll ? 200 : 60);
     const countEl = el("event-count");
     if (countEl) countEl.textContent = evs.length + " events · " + rl;
@@ -278,7 +277,7 @@ window.Views = (function () {
     if (pages.models > totalPg) pages.models = totalPg;
     const slice = models.slice((pages.models - 1) * PAGE10, pages.models * PAGE10);
     const rowsEl = el("mo-rows");
-    if (chg("mo" + pages.models, slice.map(m => [m.model, totOf(m), m.failed || 0]))) {
+    if (chg("mo" + pages.models, slice.map(m => [m.model, totOf(m), m.failed || 0, (m.calls || 0) + (m.failed || 0)]))) {
       rowsEl.innerHTML = "";
       if (!slice.length) {
         rowsEl.innerHTML = '<div class="tt-empty">暂无记录</div>';
@@ -288,11 +287,16 @@ window.Views = (function () {
         head.innerHTML =
           `<span>模型</span><span class="tt-num">输入 Tokens</span><span class="tt-num">缓存命中</span>` +
           `<span class="tt-num">输出 Tokens</span><span class="tt-num">总 Tokens</span><span class="tt-num">命中率</span>` +
-          `<span class="tt-num">请求数</span><span class="tt-num">回合数</span><span class="tt-num">失败</span><span class="tt-num">费用预估</span>`;
+          `<span class="tt-num">请求数</span><span class="tt-num">回合数</span><span class="tt-num">失败</span>` +
+          `<span class="tt-num">失败率</span><span class="tt-num">费用预估</span>`;
         rowsEl.appendChild(head);
         for (const m of slice) {
           const r = document.createElement("div");
           r.className = "tt-row mot";
+          // 失败率：失败回合 / 总回合（失败回合不产生 usage，分母 = calls + failed）
+          const failDen = (m.calls || 0) + (m.failed || 0);
+          const failRate = failDen > 0 ? ((m.failed || 0) / failDen) * 100 : null;
+          const frCls = failRate == null ? "" : failRate >= 20 ? "pct-bad" : failRate >= 5 ? "pct-warn" : "";
           r.innerHTML =
             `<span class="tt-name" title="${esc(m.model)}">${modelBadge(models.indexOf(m))}${esc(modelLabel(m.model))}</span>` +
             `<span class="tt-num">${fmtTok(m.inputOther)}</span>` +
@@ -303,7 +307,8 @@ window.Views = (function () {
             `<span class="tt-num">${fmt.format(m.requests || 0)}</span>` +
             `<span class="tt-num">${fmt.format(m.calls || 0)}</span>` +
             `<span class="tt-num${(m.failed || 0) > 0 ? " pct-bad" : ""}">${m.failed || 0}</span>` +
-            `<span class="tt-num ${costCls(costOf(m))}">¥${costOf(m).toFixed(2)}</span>`;
+            `<span class="tt-num ${frCls}" title="失败回合 / 总回合">${failRate != null ? failRate.toFixed(1) + "%" : "—"}</span>` +
+            `<span class="tt-num ${costCls(costOf(m, m.model))}">¥${costOf(m, m.model).toFixed(2)}</span>`;
           r.querySelector(".tt-name").addEventListener("click", () => switchView("model-detail", { model: m.model }));
           rowsEl.appendChild(r);
         }
@@ -323,20 +328,16 @@ window.Views = (function () {
     el("md-cache").textContent = cacheRateOf(mm) != null ? cacheRateOf(mm).toFixed(1) + "%" : "—";
     el("md-req").textContent = fmt.format(mm.requests || 0);
     el("md-calls").textContent = (mm.calls || 0) + " 回合";
-    el("md-cost").textContent = "¥" + costOf(mm).toFixed(2);
+    el("md-cost").textContent = "¥" + costOf(mm, model).toFixed(2);
     // 使用趋势（跟随顶部范围切换）
-    const win = range === "today" ? 1 : range === "week" ? 7 : 30;
+    const dKeys = rangeDayKeys(data);
+    const rl = rangeLabel();
     const mdSub = el("md-trend-sub");
-    if (mdSub) mdSub.textContent = `近 ${win} 天 · 按日`;
-    const days = dayList(data, win);
-    const bks = [];
-    for (const dd of days) {
-      const dm = (dd.day.by_model || {})[model] || {};
-      bks.push({
-        label: dd.label,
-        v: [dm.inputOther || 0, dm.inputCacheRead || 0, dm.output || 0],
-      });
-    }
+    if (mdSub) mdSub.textContent = rl + " · 按日";
+    const bks = dKeys.map(k => {
+      const dm = (((data.days || {})[k] || {}).by_model || {})[model] || {};
+      return { label: k.slice(5), v: [dm.inputOther || 0, dm.inputCacheRead || 0, dm.output || 0] };
+    });
     stackedChart(el("md-chart"), el("md-axis"), bks);
     // 会话内分析（当前范围）
     const sessions = Object.values(agg.by_session || {});
@@ -364,22 +365,22 @@ window.Views = (function () {
           r.innerHTML =
             `<span class="tt-name" title="${esc(s.session)}">${esc(sessionLabel(s.session, meta) || shortSid(s.session))}</span>` +
             `<span class="tt-num">${(t / (maxS || 1) * 100).toFixed(1)}%</span>` +
-            `<span class="tt-num">${fmtTok(t)} · ¥${costOf(sm).toFixed(2)}</span>`;
+            `<span class="tt-num">${fmtTok(t)} · ¥${costOf(sm, model).toFixed(2)}</span>`;
           r.querySelector(".tt-name").addEventListener("click", () => switchView("session-detail", { session: s.session }));
           srows.appendChild(r);
         }
       }
     }
     // 失败记录（当前范围，最多 20 条，倒序；数据源为独立失败缓冲 data.fails）
-    const fKeys = new Set(dayList(data, win).map(x => x.key));
+    const fKeys = new Set(dKeys);
     const fails = (data.fails || [])
       .filter(e => e.model === model && fKeys.has(e.date))
       .sort((a, b) => b.time - a.time)
       .slice(0, 20);
     const failSub = el("md-fail-sub");
-    if (failSub) failSub.textContent = `近 ${win} 天 · ${fails.length} 次`;
+    if (failSub) failSub.textContent = rl + " · " + fails.length + " 次";
     const fr = el("md-fail-rows");
-    if (chg("mdfail" + win, fails.map(e => [e.time, e.err_code, e.err_msg]))) {
+    if (chg("mdfail" + dKeys.join(""), fails.map(e => [e.time, e.err_code, e.err_msg]))) {
       fr.innerHTML = "";
       if (!fails.length) {
         fr.innerHTML = '<div class="tt-empty">该模型在选定范围内无失败记录</div>';
@@ -401,23 +402,9 @@ window.Views = (function () {
         }
       }
     }
-    // 费用构成
-    const comps = costParts(mm);
+    // 费用构成（按该模型计价）
+    const comps = costPartsOf(mm, model);
     donutChart(el("md-donut"), el("md-donut-legend"), el("md-donut-total"), comps, v => "¥" + v.toFixed(2));
-  }
-
-  /** 成本四分类：[{label,value,color,key}] */
-  function costParts(d) {
-    const ms = (d.inputOther || 0) / 1e6 * prices.miss;
-    const ck = (d.inputCacheRead || 0) / 1e6 * prices.cache;
-    const cw = (d.inputCacheCreation || 0) / 1e6 * prices.cwrite;
-    const ot = (d.output || 0) / 1e6 * prices.out;
-    return [
-      { label: CAT_LABELS[0], value: ms, color: CAT_COLORS[0], key: "¥" + ms.toFixed(2) },
-      { label: CAT_LABELS[1], value: ck, color: CAT_COLORS[1], key: "¥" + ck.toFixed(2) },
-      { label: CAT_LABELS[2], value: cw, color: CAT_COLORS[2], key: "¥" + cw.toFixed(2) },
-      { label: CAT_LABELS[3], value: ot, color: CAT_COLORS[3], key: "¥" + ot.toFixed(2) },
-    ].filter(x => x.value > 0);
   }
 
   /* ---------- 件：会话分析 ---------- */
@@ -502,17 +489,16 @@ window.Views = (function () {
     el("sd-total").textContent = fmtYi(totOf(sd));
     el("sd-cache").textContent = cacheRateOf(sd) != null ? cacheRateOf(sd).toFixed(1) + "%" : "—";
     el("sd-io").textContent = fmtTok(sd.inputOther || 0) + " / " + fmtTok(sd.output || 0);
-    el("sd-cost").textContent = "¥" + costOf(sd).toFixed(2);
+    el("sd-cost").textContent = "¥" + costOfAgg(sd).toFixed(2);
     // 使用趋势（跟随顶部范围切换）
-    const win = range === "today" ? 1 : range === "week" ? 7 : 30;
+    const dKeys = rangeDayKeys(data);
+    const rl = rangeLabel();
     const sdSub = el("sd-trend-sub");
-    if (sdSub) sdSub.textContent = `近 ${win} 天 · 按日`;
-    const days = dayList(data, win);
-    const bks = [];
-    for (const dd of days) {
-      const dm = (dd.day.by_session || {})[sid] || {};
-      bks.push({ label: dd.label, v: [dm.inputOther || 0, dm.inputCacheRead || 0, dm.output || 0] });
-    }
+    if (sdSub) sdSub.textContent = rl + " · 按日";
+    const bks = dKeys.map(k => {
+      const dm = (((data.days || {})[k] || {}).by_session || {})[sid] || {};
+      return { label: k.slice(5), v: [dm.inputOther || 0, dm.inputCacheRead || 0, dm.output || 0] };
+    });
     stackedChart(el("sd-chart"), el("sd-axis"), bks);
     // 模型使用占比
     const sms = Object.values(sd.by_model || {});
@@ -530,7 +516,7 @@ window.Views = (function () {
           r.innerHTML =
             `<span class="tt-name" title="${esc(m.model)}">${esc(modelLabel(m.model))}</span>` +
             `<span class="tt-num">${(totOf(m) / maxM * 100).toFixed(1)}%</span>` +
-            `<span class="tt-num">${fmtTok(totOf(m))} · ¥${costOf(m).toFixed(2)}</span>`;
+            `<span class="tt-num">${fmtTok(totOf(m))} · ¥${costOf(m, m.model).toFixed(2)}</span>`;
           mr.appendChild(r);
         }
       }
@@ -562,14 +548,16 @@ window.Views = (function () {
   /* ---------- 件：历史统计 ---------- */
   function renderHistoryView(data) {
     const allDays = Object.values(data.days || {}).sort((a, b) => a.date.localeCompare(b.date));
-    // 历史窗口跟随顶部切换（今日=1 / 7天 / 30天）
-    const win = range === "today" ? 1 : range === "week" ? 7 : 30;
-    const sliceDays = allDays.slice(-win);
+    // 历史窗口跟随顶部切换（今日 / 7天 / 30天 / 自定义）
+    const dKeys = rangeDayKeys(data);
+    const keySet = new Set(dKeys);
+    const sliceDays = allDays.filter(d => keySet.has(d.date)); // 窗口内升序
+    const rl = rangeLabel();
     const hsSub = el("hs-cost-sub");
-    if (hsSub) hsSub.textContent = "近 " + win + " 天";
+    if (hsSub) hsSub.textContent = rl;
     const htSub = el("ht-trend-sub");
-    if (htSub) htSub.textContent = "近 " + win + " 天 · 每日 Token 消耗";
-    const costSum = sliceDays.reduce((a, d) => a + costOf(d), 0);
+    if (htSub) htSub.textContent = rl + " · 每日 Token 消耗";
+    const costSum = sliceDays.reduce((a, d) => a + costOfAgg(d), 0);
     const reqSum = sliceDays.reduce((a, d) => a + (d.requests || 0), 0);
     const callSum = sliceDays.reduce((a, d) => a + (d.calls || 0), 0);
     const iSum = sliceDays.reduce((a, d) => a + (d.inputOther || 0) + (d.inputCacheRead || 0), 0);
@@ -599,7 +587,7 @@ window.Views = (function () {
     if (pages.history > totalPg) pages.history = totalPg;
     const slice2 = desc.slice((pages.history - 1) * PAGE10, pages.history * PAGE10);
     const rowsEl = el("ht-rows");
-    if (chg("ht" + pages.history + win, slice2.map(d => [d.date, totOf(d)]))) {
+    if (chg("ht" + pages.history + dKeys.join(""), slice2.map(d => [d.date, totOf(d)]))) {
       rowsEl.innerHTML = "";
       if (!slice2.length) { rowsEl.innerHTML = '<div class="tt-empty">暂无记录</div>'; }
       else {
@@ -623,7 +611,7 @@ window.Views = (function () {
             `<span class="tt-num ${cacheRateOf(d) != null ? hitCls(cacheRateOf(d)) : ""}">${cacheRateOf(d) != null ? cacheRateOf(d).toFixed(1) + "%" : "—"}</span>` +
             `<span class="tt-num">${fmt.format(d.requests || 0)}</span>` +
             `<span class="tt-num">${fmt.format(d.calls || 0)}</span>` +
-            `<span class="tt-num ${costCls(costOf(d))}">¥${costOf(d).toFixed(2)}</span>`;
+            `<span class="tt-num ${costCls(costOfAgg(d))}">¥${costOfAgg(d).toFixed(2)}</span>`;
           rowsEl.appendChild(r);
         }
       }
@@ -635,12 +623,12 @@ window.Views = (function () {
   function renderCost(data) {
     const days = data.days || {};
     // 主内容区（趋势/构成/明细）跟随顶部范围切换；KPI 四卡保持固定对比口径
-    const win = range === "today" ? 1 : range === "week" ? 7 : 30;
-    const keys = dayList(data, win).map(x => x.key);
+    const dKeys = rangeDayKeys(data);
+    const rl = rangeLabel();
     const k30 = dayList(data, 30).map(x => x.key);
     const todayK = dayList(data, 1)[0].key;
     const yKey = dayList(data, 2)[0].key;
-    const costOfKey = k => costOf(days[k] || emptyDay(k));
+    const costOfKey = k => costOfAgg(days[k] || emptyDay(k));
     const cToday = costOfKey(todayK);
     const cYest = costOfKey(yKey);
     const cWeek = k30.slice(-7).reduce((a, k) => a + costOfKey(k), 0);
@@ -657,13 +645,13 @@ window.Views = (function () {
     }
     el("cs-week").textContent = "¥" + cWeek.toFixed(2);
     el("cs-month").textContent = "¥" + cMonth.toFixed(2);
-    // 面板标题同步窗口天数
+    // 面板标题同步窗口
     const subEl = el("cs-trend-sub");
-    if (subEl) subEl.textContent = `近 ${win} 天 · 按日`;
+    if (subEl) subEl.textContent = rl + " · 按日";
     const donutSubEl = el("cs-donut-sub");
-    if (donutSubEl) donutSubEl.textContent = `近 ${win} 天`;
+    if (donutSubEl) donutSubEl.textContent = rl;
     // 费用趋势（按窗口天数折线）
-    const lineBks = dayList(data, win).map(x => ({ label: x.label, v: costOfKey(x.key) }));
+    const lineBks = dKeys.map(k => ({ label: k.slice(5), v: costOfKey(k) }));
     lineChart(el("cs-chart"), lineBks);
     const axisEl = el("cs-axis");
     if (axisEl) {
@@ -675,28 +663,28 @@ window.Views = (function () {
         axisEl.appendChild(s);
       });
     }
-    // 费用构成（按窗口天数）
-    const parts = { ms: 0, ck: 0, cw: 0, ot: 0 };
-    for (const k of keys) {
-      const dd = days[k] || emptyDay(k);
-      parts.ms += (dd.inputOther || 0) / 1e6 * prices.miss;
-      parts.ck += (dd.inputCacheRead || 0) / 1e6 * prices.cache;
-      parts.cw += (dd.inputCacheCreation || 0) / 1e6 * prices.cwrite;
-      parts.ot += (dd.output || 0) / 1e6 * prices.out;
+    // 费用构成（按窗口天数，尊重按模型定价）
+    const partAgg = { miss: 0, cache: 0, cwrite: 0, out: 0 };
+    for (const k of dKeys) {
+      const comps = costPartsOf(days[k] || emptyDay(k));
+      partAgg.miss += comps[0].value;
+      partAgg.cache += comps[1].value;
+      partAgg.cwrite += comps[2].value;
+      partAgg.out += comps[3].value;
     }
     donutChart(el("cs-donut"), el("cs-donut-legend"), el("cs-donut-total"), [
-      { label: CAT_LABELS[0], value: parts.ms, color: CAT_COLORS[0], text: "¥" + parts.ms.toFixed(2) },
-      { label: CAT_LABELS[1], value: parts.ck, color: CAT_COLORS[1], text: "¥" + parts.ck.toFixed(2) },
-      { label: CAT_LABELS[2], value: parts.cw, color: CAT_COLORS[2], text: "¥" + parts.cw.toFixed(2) },
-      { label: CAT_LABELS[3], value: parts.ot, color: CAT_COLORS[3], text: "¥" + parts.ot.toFixed(2) },
+      { label: CAT_LABELS[0], value: partAgg.miss, color: CAT_COLORS[0], text: "¥" + partAgg.miss.toFixed(2) },
+      { label: CAT_LABELS[1], value: partAgg.cache, color: CAT_COLORS[1], text: "¥" + partAgg.cache.toFixed(2) },
+      { label: CAT_LABELS[2], value: partAgg.cwrite, color: CAT_COLORS[2], text: "¥" + partAgg.cwrite.toFixed(2) },
+      { label: CAT_LABELS[3], value: partAgg.out, color: CAT_COLORS[3], text: "¥" + partAgg.out.toFixed(2) },
     ], v => "¥" + v.toFixed(2));
     // 费用明细（窗口天数倒序分页）
-    const desc = keys.slice().reverse();
+    const desc = dKeys.slice().reverse();
     const totalPg = Math.max(Math.ceil(desc.length / PAGE10), 1);
     if (pages.cost > totalPg) pages.cost = totalPg;
     const slice2 = desc.slice((pages.cost - 1) * PAGE10, pages.cost * PAGE10);
     const rowsEl = el("cs-rows");
-    if (chg("cs" + pages.cost, slice2.map(k => [k, costOfKey(k)]))) {
+    if (chg("cs" + pages.cost + dKeys.join(""), slice2.map(k => [k, costOfKey(k)]))) {
       rowsEl.innerHTML = "";
       if (!slice2.length) { rowsEl.innerHTML = '<div class="tt-empty">暂无记录</div>'; }
       else {
@@ -708,11 +696,8 @@ window.Views = (function () {
           `<span class="tt-num">输出</span><span class="tt-num">总费用</span>`;
         rowsEl.appendChild(head);
         for (const k of slice2) {
-          const dd = days[k] || emptyDay(k);
-          const ms = (dd.inputOther || 0) / 1e6 * prices.miss;
-          const ck = (dd.inputCacheRead || 0) / 1e6 * prices.cache;
-          const cw = (dd.inputCacheCreation || 0) / 1e6 * prices.cwrite;
-          const ot = (dd.output || 0) / 1e6 * prices.out;
+          const comps = costPartsOf(days[k] || emptyDay(k));
+          const ms = comps[0].value, ck = comps[1].value, cw = comps[2].value, ot = comps[3].value;
           const r = document.createElement("div");
           r.className = "tt-row cst";
           r.style.gridTemplateColumns = "92px 110px 100px 90px 100px";
@@ -732,16 +717,193 @@ window.Views = (function () {
   /* ---------- 件：设置 ---------- */
   function renderSettings() {
     if (!settingsInit) return;
+    const ae = document.activeElement;
     // 轮询重绘时跳过正在编辑的定价输入框，避免覆盖用户输入
-    if (document.activeElement !== el("p-miss")) el("p-miss").value = prices.miss;
-    if (document.activeElement !== el("p-cache")) el("p-cache").value = prices.cache;
-    if (document.activeElement !== el("p-cwrite")) el("p-cwrite").value = prices.cwrite;
-    if (document.activeElement !== el("p-out")) el("p-out").value = prices.out;
+    if (ae !== el("p-miss")) el("p-miss").value = prices.miss;
+    if (ae !== el("p-cache")) el("p-cache").value = prices.cache;
+    if (ae !== el("p-cwrite")) el("p-cwrite").value = prices.cwrite;
+    if (ae !== el("p-out")) el("p-out").value = prices.out;
+    // 按模型定价行：跳过正在编辑的行，其余从 prices.models 同步
+    const pmRows = el("pm-rows");
+    if (pmRows && !pmRows.contains(ae)) {
+      for (const row of pmRows.querySelectorAll(".pm-row")) {
+        const nm = row.querySelector(".pm-name").value.trim();
+        const mp = nm && (prices.models || {})[nm];
+        if (!mp) continue;
+        const ins = row.querySelectorAll("input");
+        const kk = ["miss", "cache", "cwrite", "out"];
+        for (let i = 0; i < 4; i++) {
+          const inp = ins[i + 1];
+          if (String(inp.value) !== String(mp[kk[i]])) inp.value = mp[kk[i]];
+        }
+      }
+    }
+    // datalist 模型名：数据中出现过的模型 + 已配置覆盖的模型
+    const dl = el("pm-models");
+    if (dl) {
+      const names = new Set(Object.keys(prices.models || {}));
+      for (const d of Object.values((current && current.days) || {})) {
+        for (const mk of Object.keys(d.by_model || {})) names.add(mk);
+      }
+      const opts = [...names].sort().map(n => `<option value="${esc(n)}"></option>`).join("");
+      if (dl.innerHTML !== opts) dl.innerHTML = opts;
+    }
+    // 告警配置同步（跳过正在编辑的输入框）
+    const al = loadAlerts();
+    const aEn = el("al-enabled"), aCost = el("al-cost"), aFail = el("al-fail");
+    if (aEn) aEn.checked = al.enabled;
+    if (aCost && ae !== aCost && String(aCost.value) !== String(al.costLimit)) aCost.value = al.costLimit > 0 ? al.costLimit : "";
+    if (aFail && ae !== aFail && String(aFail.value) !== String(al.failLimit)) aFail.value = al.failLimit > 0 ? al.failLimit : "";
     // 主题/密度按钮同步
     const theme = document.documentElement.dataset.theme || "dark";
     document.querySelectorAll("#set-theme button").forEach(b => b.classList.toggle("active", b.dataset.themeMode === theme));
     const density = document.body.dataset.density || "full";
     document.querySelectorAll("#set-density button").forEach(b => b.classList.toggle("active", b.dataset.density === density));
+  }
+
+  /* ---------- 设置页：按模型定价行 ---------- */
+  function addModelRow(name, vals) {
+    const wrap = el("pm-rows");
+    if (!wrap) return;
+    const row = document.createElement("div");
+    row.className = "pm-row";
+    const nameInput = document.createElement("input");
+    nameInput.type = "text"; nameInput.className = "pm-name";
+    nameInput.placeholder = "模型名（数据中的模型名）";
+    nameInput.setAttribute("list", "pm-models");
+    nameInput.value = name || "";
+    const priceFields = ["miss", "cache", "cwrite", "out"];
+    const ins = [];
+    for (const k of priceFields) {
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.step = "0.001"; inp.min = "0";
+      inp.value = vals && vals[k] != null ? vals[k] : "";
+      ins.push(inp);
+    }
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "pm-del"; del.title = "删除该模型定价"; del.textContent = "✕";
+    del.addEventListener("click", () => row.remove());
+    row.append(nameInput, ...ins, del);
+    wrap.appendChild(row);
+  }
+  /** 从 prices.models 重建全部按模型定价行 */
+  function buildModelRows() {
+    const wrap = el("pm-rows");
+    if (!wrap) return;
+    wrap.innerHTML = "";
+    for (const [name, vals] of Object.entries(prices.models || {})) addModelRow(name, vals);
+  }
+
+  /* ---------- 设置页：CSV 导出 ---------- */
+  function csvCell(v) {
+    const s = String(v == null ? "" : v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function downloadCSV(filename, rows) {
+    const csv = "\ufeff" + rows.map(r => r.map(csvCell).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename + ".csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  function ymd() {
+    const d = new Date();
+    const p = n => String(n).padStart(2, "0");
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
+  }
+  function exportDailyCSV() {
+    if (!current) return;
+    const days = current.days || {};
+    const rows = [["日期", "输入未命中", "缓存命中", "缓存写入", "输出", "总Tokens", "请求数", "回合数", "失败数", "费用(元)"]];
+    Object.keys(days).sort().forEach(k => {
+      const d = days[k];
+      rows.push([k, d.inputOther || 0, d.inputCacheRead || 0, d.inputCacheCreation || 0, d.output || 0,
+        totOf(d), d.requests || 0, d.calls || 0, d.failed || 0, +(costOfAgg(d).toFixed(4))]);
+    });
+    downloadCSV("kimi-token-daily-" + ymd(), rows);
+  }
+  function exportModelsCSV() {
+    if (!current) return;
+    const agg = {};
+    for (const d of Object.values(current.days || {})) {
+      for (const [mk, m] of Object.entries(d.by_model || {})) {
+        if (!agg[mk]) agg[mk] = { inputOther: 0, inputCacheRead: 0, inputCacheCreation: 0, output: 0, calls: 0, requests: 0, failed: 0 };
+        const a = agg[mk];
+        a.inputOther += m.inputOther || 0; a.inputCacheRead += m.inputCacheRead || 0;
+        a.inputCacheCreation += m.inputCacheCreation || 0; a.output += m.output || 0;
+        a.calls += m.calls || 0; a.requests += m.requests || 0; a.failed += m.failed || 0;
+      }
+    }
+    const list = Object.entries(agg).map(([name, a]) => ({ name, ...a, tot: totOf(a) }));
+    list.sort((x, y) => y.tot - x.tot);
+    const rows = [["模型", "输入未命中", "缓存命中", "缓存写入", "输出", "总Tokens", "请求数", "回合数", "失败数", "费用(元)"]];
+    for (const m of list) {
+      rows.push([m.name, m.inputOther, m.inputCacheRead, m.inputCacheCreation, m.output, m.tot,
+        m.requests, m.calls, m.failed, +(costOf(m, m.name).toFixed(4))]);
+    }
+    downloadCSV("kimi-token-models-" + ymd(), rows);
+  }
+
+  /* ---------- 告警通知 ---------- */
+  const ALERT_KEY = "kimi_token_alerts";
+  const ALERT_COOLDOWN = 30 * 60 * 1000; // 同类 30 分钟内不重复提醒
+  const alertLast = { cost: 0, fail: 0 };
+  function loadAlerts() {
+    try {
+      const raw = localStorage.getItem(ALERT_KEY);
+      if (raw) {
+        const a = JSON.parse(raw);
+        return { enabled: !!a.enabled, costLimit: +a.costLimit || 0, failLimit: +a.failLimit || 0 };
+      }
+    } catch (e) {}
+    return { enabled: false, costLimit: 0, failLimit: 0 };
+  }
+  /** 从设置页表单读取并保存告警配置 */
+  function saveAlerts() {
+    const a = {
+      enabled: el("al-enabled") ? el("al-enabled").checked : false,
+      costLimit: parseFloat(el("al-cost") ? el("al-cost").value : 0) || 0,
+      failLimit: parseInt(el("al-fail") ? el("al-fail").value : 0, 10) || 0,
+    };
+    try { localStorage.setItem(ALERT_KEY, JSON.stringify(a)); } catch (e) {}
+    return a;
+  }
+  /** 轮询后检查：今日费用 / 今日失败次数超阈值触发告警（每类 30 分钟冷却） */
+  function checkAlerts(data) {
+    const cfg = loadAlerts();
+    if (!cfg.enabled || !data) return;
+    const day = (data.days || {})[data.today] || emptyDay(data.today);
+    const now = Date.now();
+    const cost = costOfAgg(day);
+    if (cfg.costLimit > 0 && cost > cfg.costLimit) {
+      fireAlert("cost", "今日费用超限", "今日费用 ¥" + cost.toFixed(2) + "，超过阈值 ¥" + cfg.costLimit.toFixed(2), now);
+    }
+    if (cfg.failLimit > 0 && (day.failed || 0) > cfg.failLimit) {
+      fireAlert("fail", "今日失败次数超限", "今日失败 " + (day.failed || 0) + " 次，超过阈值 " + cfg.failLimit + " 次", now);
+    }
+  }
+  function fireAlert(type, title, body, now) {
+    if (now - (alertLast[type] || 0) < ALERT_COOLDOWN) return;
+    alertLast[type] = now;
+    // 浏览器通知（权限已授予时）
+    if ("Notification" in window && Notification.permission === "granted") {
+      try { new Notification(title, { body, tag: "kimi-alert-" + type }); } catch (e) { /* 通知失败忽略，仍展示 toast */ }
+    }
+    // 页面右上角 toast
+    let box = el("toast-box");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "toast-box";
+      box.className = "toast-box";
+      document.body.appendChild(box);
+    }
+    const t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = `<div class="t">${esc(title)}</div><div>${esc(body)}</div>`;
+    box.appendChild(t);
+    setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, 10000);
   }
 
   /* ---------------- 初始化 ---------------- */
@@ -763,17 +925,54 @@ window.Views = (function () {
         prices.cache = parseFloat(el("p-cache").value) || 0;
         prices.cwrite = parseFloat(el("p-cwrite").value) || 0;
         prices.out = parseFloat(el("p-out").value) || 0;
+        // 按模型定价行：模型名非空的行写入 prices.models
+        prices.models = prices.models || {};
+        const pmRows = el("pm-rows");
+        if (pmRows) {
+          for (const row of pmRows.querySelectorAll(".pm-row")) {
+            const nm = row.querySelector(".pm-name").value.trim();
+            if (!nm) continue;
+            const ins = row.querySelectorAll("input");
+            prices.models[nm] = {
+              miss: parseFloat(ins[1].value) || 0,
+              cache: parseFloat(ins[2].value) || 0,
+              cwrite: parseFloat(ins[3].value) || 0,
+              out: parseFloat(ins[4].value) || 0,
+            };
+          }
+        }
         savePrices();
         if (current) render(current);
       });
     }
     const pr = el("set-price-reset");
     if (pr) pr.addEventListener("click", () => {
-      prices = { ...DEFAULT_PRICES };
+      prices = { ...DEFAULT_PRICES, models: {} }; // 含 models:{}（独立对象），一并清空按模型覆盖
       savePrices();
+      buildModelRows();
       renderSettings();
       if (current) render(current);
     });
+    // 按模型定价：添加行 + 初始重建
+    const pma = el("pm-add");
+    if (pma) pma.addEventListener("click", () => addModelRow("", null));
+    buildModelRows();
+    // 告警通知面板
+    const aEn = el("al-enabled");
+    if (aEn) aEn.addEventListener("change", () => {
+      if (aEn.checked && "Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
+      saveAlerts();
+    });
+    const aCost = el("al-cost"), aFail = el("al-fail");
+    if (aCost) aCost.addEventListener("change", saveAlerts);
+    if (aFail) aFail.addEventListener("change", saveAlerts);
+    // 数据管理：导出 CSV
+    const exD = el("export-daily-csv");
+    if (exD) exD.addEventListener("click", exportDailyCSV);
+    const exM = el("export-models-csv");
+    if (exM) exM.addEventListener("click", exportModelsCSV);
     // 主题模式
     document.querySelectorAll("#set-theme button").forEach(b => {
       b.addEventListener("click", () => {
@@ -816,7 +1015,7 @@ window.Views = (function () {
     const cl = el("clear-local");
     if (cl) {
       cl.addEventListener("click", () => {
-        if (window.confirm("确认清空浏览器本地配置（定价/主题/展开状态）？不影响服务器统计 data.json。")) {
+        if (window.confirm("确认清空浏览器本地配置（定价/主题/展开状态）？不影响服务器统计 data.db。")) {
           try { localStorage.clear(); } catch (er) { /* ignore */ }
           location.reload();
         }
@@ -856,5 +1055,7 @@ window.Views = (function () {
     currentView,
     dispatch: renderView,
     renderView,
+    checkAlerts,
+    saveAlerts,
   };
 })();
