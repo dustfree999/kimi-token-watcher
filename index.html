@@ -242,6 +242,7 @@
               <button data-scope="all" class="active">全部</button>
               <button data-scope="main">主</button>
               <button data-scope="sub">子</button>
+              <button data-scope="failed">失败</button>
             </div>
             <div class="ph-right">
               <select id="ev-model-filter" aria-label="模型筛选"><option value="">全部模型</option></select>
@@ -402,69 +403,169 @@
 
       <!-- ================== 视图 7：设置 ================== -->
       <section class="view" id="view-settings">
-        <div class="gs-wrap">
-          <section class="panel">
-            <div class="panel-head"><div class="pt"><h2>定价设置</h2><span class="muted">元 / 百万 tokens · 本地保存</span></div></div>
-            <div class="price-form">
-              <label>输入（缓存未命中）<input type="number" id="p-miss" step="0.01" min="0"></label>
-              <label>输入（缓存命中）<input type="number" id="p-cache" step="0.001" min="0"></label>
-              <label>输入（缓存写入）<input type="number" id="p-cwrite" step="0.001" min="0"></label>
-              <label>输出<input type="number" id="p-out" step="0.01" min="0"></label>
-              <div class="modal-actions">
-                <button class="btn-ghost" id="set-price-reset">恢复默认</button>
-                <button class="btn" id="set-price-save">保存</button>
+        <div class="settings-page">
+          <div class="settings-tabs">
+            <button class="settings-tab active" data-tab="pricing">定价</button>
+            <button class="settings-tab" data-tab="catalog">价格目录</button>
+            <button class="settings-tab" data-tab="alerts">告警通知</button>
+            <button class="settings-tab" data-tab="system">系统</button>
+            <button class="settings-tab" data-tab="data">数据管理</button>
+          </div>
+
+          <div class="settings-panels">
+            <!-- 定价 -->
+            <div class="settings-panel active" data-panel="pricing">
+              <div class="pricing-layout">
+                <section class="panel default-prices-panel">
+                  <div class="panel-head"><div class="pt"><h2>全局默认价</h2><span class="muted">元 / 百万 tokens</span></div></div>
+                  <div class="price-form">
+                    <label>输入（缓存未命中）<input type="number" id="p-miss" step="0.01" min="0"></label>
+                    <label>输入（缓存命中）<input type="number" id="p-cache" step="0.001" min="0"></label>
+                    <label>输入（缓存写入）<input type="number" id="p-cwrite" step="0.001" min="0"></label>
+                    <label>输出<input type="number" id="p-out" step="0.01" min="0"></label>
+                    <p class="muted" style="font-size:11px;margin:6px 0 0">未手动定价且未命中目录的模型使用此价格。</p>
+                  </div>
+                </section>
+
+                <section class="panel model-pricing-panel">
+                  <div class="panel-head">
+                    <div class="pt"><h2>按模型定价</h2><span class="muted" id="pm-count">0 个模型</span></div>
+                    <div class="ph-right">
+                      <input type="text" id="pm-search" class="pm-search" placeholder="搜索模型…">
+                      <button class="btn-ghost" id="pm-add" type="button">+ 添加</button>
+                      <button class="btn-ghost" id="pm-fill" type="button" title="把数据中出现过的模型生成定价行，价格预填目录价（目录未命中的填默认价）">从目录填充</button>
+                    </div>
+                  </div>
+                  <div class="pm-table-wrap">
+                    <table class="pm-table">
+                      <thead>
+                        <tr>
+                          <th class="pm-col-model">模型</th>
+                          <th class="pm-col-source">来源</th>
+                          <th class="pm-col-price">输入未命中</th>
+                          <th class="pm-col-price">缓存命中</th>
+                          <th class="pm-col-price">缓存写入</th>
+                          <th class="pm-col-price">输出</th>
+                          <th class="pm-col-action"></th>
+                        </tr>
+                      </thead>
+                      <tbody id="pm-rows"></tbody>
+                    </table>
+                  </div>
+                  <div class="pm-table-foot">
+                    <span class="muted" id="pm-fill-status"></span>
+                    <div class="modal-actions">
+                      <button class="btn-ghost" id="pm-clear" type="button">清空手动定价</button>
+                      <button class="btn-ghost" id="set-price-reset" type="button">恢复默认</button>
+                      <button class="btn" id="set-price-save" type="button">保存</button>
+                    </div>
+                  </div>
+                </section>
               </div>
-              <div class="pm-block">
-                <div class="pm-head">按模型定价（可选）<span class="muted">未设置的模型使用上方默认价</span></div>
-                <div class="pm-rows" id="pm-rows"></div>
-                <datalist id="pm-models"></datalist>
-                <div class="pm-add"><button class="btn-ghost" id="pm-add" type="button">+ 添加模型</button></div>
-              </div>
             </div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><div class="pt"><h2>系统设置</h2></div></div>
-            <div class="gs-row"><span class="gs-label">主题模式</span>
-              <div class="seg" id="set-theme">
-                <button data-theme-mode="dark" class="active">深色</button>
-                <button data-theme-mode="light">浅色</button>
-              </div>
+
+            <!-- 价格目录 -->
+            <div class="settings-panel" data-panel="catalog">
+              <section class="panel catalog-panel">
+                <div class="panel-head"><div class="pt"><h2>内置价格目录</h2><span class="muted">models.dev · 元/百万 tokens</span></div></div>
+                <div class="catalog-grid">
+                  <div class="catalog-card">
+                    <span class="cc-label">数据来源</span>
+                    <span class="cc-val mono" id="catalog-source">—</span>
+                  </div>
+                  <div class="catalog-card">
+                    <span class="cc-label">数据日期</span>
+                    <span class="cc-val mono" id="catalog-date">—</span>
+                  </div>
+                  <div class="catalog-card">
+                    <span class="cc-label">收录模型数</span>
+                    <span class="cc-val mono" id="catalog-count">0</span>
+                  </div>
+                  <div class="catalog-card">
+                    <span class="cc-label">汇率（USD → CNY）</span>
+                    <span class="cc-val"><input type="number" id="catalog-rate" step="0.01" min="0" value="7.2"> 元/美元</span>
+                  </div>
+                </div>
+                <div class="gs-actions" style="margin-top:14px">
+                  <button class="btn btn-blue" id="catalog-sync">同步在线目录</button>
+                  <button class="btn-ghost" id="catalog-restore">恢复内置目录</button>
+                </div>
+                <p class="muted" id="catalog-status" style="margin:12px 0 0">页面加载不自动联网，点击「同步在线目录」手动更新；目录价格用于未手动定价的模型。</p>
+              </section>
             </div>
-            <div class="gs-row"><span class="gs-label">显示模式</span>
-              <div class="seg" id="set-density">
-                <button data-density="full" class="active">完整</button>
-                <button data-density="compact">简洁</button>
-              </div>
+
+            <!-- 告警通知 -->
+            <div class="settings-panel" data-panel="alerts">
+              <section class="panel alerts-panel">
+                <div class="panel-head"><div class="pt"><h2>告警通知</h2></div></div>
+                <div class="alerts-form">
+                  <label class="al-switch-row">
+                    <input type="checkbox" id="al-enabled">
+                    <span>启用浏览器通知与页面提示</span>
+                  </label>
+                  <div class="gs-row">
+                    <span class="gs-label">当日费用阈值</span>
+                    <span class="gs-val"><input type="number" id="al-cost" step="0.01" min="0" placeholder="0"> 元</span>
+                  </div>
+                  <div class="gs-row">
+                    <span class="gs-label">当日失败次数阈值</span>
+                    <span class="gs-val"><input type="number" id="al-fail" step="1" min="0" placeholder="0"> 次</span>
+                  </div>
+                  <p class="muted" style="margin:10px 0 0">超过阈值时浏览器通知 + 页面右上角提示，30 分钟内同类不重复提醒；阈值填 0 表示不触发。</p>
+                </div>
+              </section>
             </div>
-            <div class="gs-row"><span class="gs-label">自动刷新</span><span class="gs-val">每 2 秒（可点顶栏“刷新”手动触发）</span></div>
-            <div class="gs-row"><span class="gs-label">版本</span><span class="gs-val mono">v1.0.0 · 纯本地服务</span></div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><div class="pt"><h2>告警通知</h2></div></div>
-            <div class="gs-row"><span class="gs-label">启用通知</span>
-              <span class="gs-val"><label class="al-switch"><input type="checkbox" id="al-enabled"> 启用</label></span>
+
+            <!-- 系统 -->
+            <div class="settings-panel" data-panel="system">
+              <section class="panel system-panel">
+                <div class="panel-head"><div class="pt"><h2>系统设置</h2></div></div>
+                <div class="system-grid">
+                  <div class="system-card">
+                    <span class="sc-label">主题模式</span>
+                    <div class="seg" id="set-theme">
+                      <button data-theme-mode="dark" class="active">深色</button>
+                      <button data-theme-mode="light">浅色</button>
+                    </div>
+                  </div>
+                  <div class="system-card">
+                    <span class="sc-label">显示模式</span>
+                    <div class="seg" id="set-density">
+                      <button data-density="full" class="active">完整</button>
+                      <button data-density="compact">简洁</button>
+                    </div>
+                  </div>
+                  <div class="system-card">
+                    <span class="sc-label">自动刷新</span>
+                    <span class="sc-val">每 2 秒（可点顶栏“刷新”手动触发）</span>
+                  </div>
+                  <div class="system-card">
+                    <span class="sc-label">版本</span>
+                    <span class="sc-val mono">v1.0.0 · 纯本地服务</span>
+                  </div>
+                </div>
+              </section>
             </div>
-            <div class="gs-row"><span class="gs-label">当日费用阈值</span>
-              <span class="gs-val"><input type="number" id="al-cost" step="0.01" min="0" placeholder="0"> 元</span>
+
+            <!-- 数据管理 -->
+            <div class="settings-panel" data-panel="data">
+              <section class="panel data-panel">
+                <div class="panel-head"><div class="pt"><h2>数据管理</h2></div></div>
+                <div class="data-info">
+                  <div class="gs-row"><span class="gs-label">数据源目录</span><span class="gs-val mono" id="gs-dir">~/.kimi-code/sessions</span></div>
+                  <div class="gs-row"><span class="gs-label">采集日志数</span><span class="gs-val mono" id="gs-files">—</span></div>
+                </div>
+                <div class="gs-actions" style="margin-top:14px">
+                  <button class="btn btn-blue" id="export-config">导出配置</button>
+                  <button class="btn btn-blue" id="export-daily-csv">导出按日 CSV</button>
+                  <button class="btn btn-blue" id="export-models-csv">导出按模型 CSV</button>
+                  <button class="link-btn" id="open-dir2">打开数据目录</button>
+                  <button class="btn btn-danger" id="clear-local">清空本地数据</button>
+                </div>
+                <p class="muted" style="margin:12px 0 0">“清空本地数据”仅清除浏览器中的定价等本地配置，不影响服务器 data.db 统计。</p>
+              </section>
             </div>
-            <div class="gs-row"><span class="gs-label">当日失败次数阈值</span>
-              <span class="gs-val"><input type="number" id="al-fail" step="1" min="0" placeholder="0"> 次</span>
-            </div>
-            <p class="muted" style="margin:10px 0 0">超过阈值时浏览器通知 + 页面右上角提示，30 分钟内同类不重复提醒；阈值填 0 表示不触发。</p>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><div class="pt"><h2>数据管理</h2></div></div>
-            <div class="gs-row"><span class="gs-label">数据源目录</span><span class="gs-val mono" id="gs-dir">~/.kimi-code/sessions</span></div>
-            <div class="gs-row"><span class="gs-label">采集日志数</span><span class="gs-val mono" id="gs-files">—</span></div>
-            <div class="gs-actions">
-              <button class="btn btn-blue" id="export-config">导出配置</button>
-              <button class="btn btn-blue" id="export-daily-csv">导出按日 CSV</button>
-              <button class="btn btn-blue" id="export-models-csv">导出按模型 CSV</button>
-              <button class="link-btn" id="open-dir2">打开数据目录</button>
-              <button class="btn btn-danger" id="clear-local">清空本地数据</button>
-            </div>
-            <p class="muted" style="margin:10px 0 0">“清空本地数据”仅清除浏览器中的定价等本地配置，不影响服务器 data.db 统计。</p>
-          </section>
+          </div>
         </div>
       </section>
 
@@ -510,6 +611,7 @@
 </div>
 
 <script src="js/utils.js"></script>
+<script src="js/pricing-catalog.js"></script>
 <script src="js/data.js"></script>
 <script src="js/render.js"></script>
 <script src="js/main.js"></script>

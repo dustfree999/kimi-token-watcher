@@ -5,7 +5,7 @@
 "use strict";
 
 const PRICE_KEY = "kimi_token_prices";
-const DEFAULT_PRICES = { miss: 1.0, cache: 0.02, cwrite: 0, out: 2.0, models: {} };
+const DEFAULT_PRICES = { miss: 3.0, cache: 0.1, cwrite: 0, out: 9.0, models: {} };
 const DAY_MS = 86400000;
 
 /* ---------- 跨文件共享状态（经典 script 全局作用域共享，render/main/views 均可读写） ---------- */
@@ -15,7 +15,7 @@ let customRange = { start: null, end: null }; // 自定义范围（YYYY-MM-DD，
 let prices = loadPrices();
 let autoFollow = true;       // 事件流是否自动跟随顶部（用户滚离顶部即暂停）
 let chartGranularity = "hour"; // Token 使用趋势粒度：hour | day
-const evFilter = { scope: "all", model: "" }; // 事件流过滤：全部/主/子 + 模型
+const evFilter = { scope: "all", model: "" }; // 事件流过滤：全部/主/子/失败 + 模型
 
 /* ---------- 定价 ---------- */
 function loadPrices() {
@@ -29,6 +29,70 @@ function loadPrices() {
   return base;
 }
 function savePrices() { localStorage.setItem(PRICE_KEY, JSON.stringify(prices)); }
+
+/* ---------- 内置价格目录（models.dev，元/百万 tokens） ---------- */
+const CATALOG_KEY = "kimi_token_price_catalog"; // localStorage 存用户手动同步下来的目录
+
+/** 取当前生效的价格目录：优先 localStorage 同步版，其次内置静态 PRICING_CATALOG（js/pricing-catalog.js），都没有返回 null */
+function getCatalog() {
+  try {
+    const raw = localStorage.getItem(CATALOG_KEY);
+    if (raw) {
+      const c = JSON.parse(raw);
+      if (c && c.models) return c;
+    }
+  } catch (e) {}
+  if (typeof PRICING_CATALOG !== "undefined" && PRICING_CATALOG && PRICING_CATALOG.models) return PRICING_CATALOG;
+  return null;
+}
+
+/** 在价格目录中按策略匹配模型，命中返回 {miss, cache, cwrite:0, out}（元/百万 tokens），未命中返回 null */
+function catalogPriceOf(model) {
+  if (model == null) return null;
+  const cat = getCatalog();
+  if (!cat || !cat.models) return null;
+  const models = cat.models;
+  const target = String(model).trim();
+  if (!target) return null;
+
+  // 命中的目录条目 → 统一输出 4 槽位（cwrite 目录没有就补 0）
+  const hit = id => {
+    const m = models[id];
+    if (!m) return null;
+    return {
+      miss: m.miss || 0,
+      cache: m.cache || 0,
+      cwrite: m.cwrite || 0,
+      out: m.out || 0,
+    };
+  };
+
+  // 1. 精确匹配
+  if (models[target]) return hit(target);
+  // 2. 双方小写后匹配
+  const lower = target.toLowerCase();
+  if (models[lower]) return hit(lower);
+  // 3. aliases 小写匹配
+  for (const [id, m] of Object.entries(models)) {
+    if (m.aliases && m.aliases.some(a => String(a).toLowerCase() === lower)) return hit(id);
+  }
+  // 4. 模糊匹配：去掉 provider 前缀（如 火山codingplan/Kimi-K2.7-Code → Kimi-K2.7-Code）、转小写、去空格后，
+  //    与目录模型 ID 的尾部或 aliases 做包含匹配
+  const norm = target.split("/").pop().toLowerCase().replace(/\s+/g, "");
+  if (norm && norm.length >= 3) {
+    for (const [id, m] of Object.entries(models)) {
+      const idNorm = String(id).toLowerCase().replace(/\s+/g, "");
+      if (idNorm === norm || idNorm.endsWith(norm)) return hit(id);
+      if (m.aliases) {
+        for (const a of m.aliases) {
+          const an = String(a).toLowerCase().replace(/\s+/g, "");
+          if (an === norm || an.includes(norm) || norm.includes(an)) return hit(id);
+        }
+      }
+    }
+  }
+  return null;
+}
 
 /* ---------- 数据选择：按范围聚合 days ---------- */
 function buildRangeData(data, granularity = chartGranularity) {

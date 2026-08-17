@@ -28,9 +28,10 @@ function render(data) {
   el("m-total-label").textContent = rd.label + "总 Tokens";
   el("m-total").textContent = fmtYi(totOf(d));
   el("m-total").title = fmtFull(totOf(d)) + " tokens · " + (d.calls || 0) + " 回合 · 平均 " + fmtTok(d.calls ? totOf(d) / d.calls : 0) + " /回合";
-  // 副行：输入/输出（带色点）+ 较昨日趋势
+  // 副行：输入/输出（带色点）+ 较昨日趋势；数值悬浮显示完整 tokens
+  const tokSpan = v => `<span title="${fmtFull(v)} tokens">${fmtTok(v)}</span>`;
   let totalSub =
-    `<span style="white-space:nowrap;">输入 ${fmtTok(d.inputOther)} <i class="dot-out"></i>输出 ${fmtTok(d.output)}</span>`;
+    `<span style="white-space:nowrap;">输入 ${tokSpan(d.inputOther)} <i class="dot-out"></i>输出 ${tokSpan(d.output)}</span>`;
   const vs = (range === "today" && data.vs_yesterday && data.vs_yesterday.pct != null) ? data.vs_yesterday.pct : null;
   if (vs != null) {
     const up = vs >= 0;
@@ -48,8 +49,8 @@ function render(data) {
     " · 输出 ¥" + cparts[3].value.toFixed(2);
   const inp = d.inputOther + d.inputCacheRead;
   el("m-cache").textContent = inp > 0 ? (d.inputCacheRead / inp * 100).toFixed(1) + "%" : "—";
-  el("m-cache-sub").textContent = inp > 0
-    ? "缓存读 " + fmtTok(d.inputCacheRead) + " · 缓存写 " + fmtTok(d.inputCacheCreation)
+  el("m-cache-sub").innerHTML = inp > 0
+    ? `缓存读 ${tokSpan(d.inputCacheRead)} · 缓存写 ${tokSpan(d.inputCacheCreation)}`
     : "暂无输入";
   el("m-cache").title = inp > 0 ? `${fmtFull(d.inputCacheRead)} / ${fmtFull(inp)} tokens 输入缓存率` : "";
   el("m-calls").textContent = fmt.format(d.requests || d.calls);
@@ -63,7 +64,7 @@ function render(data) {
   if (range === "today") {
     const peak = data.peak_hour;
     el("m-peak").textContent = peak ? peakRange(peak.hour) : "—";
-    el("m-peak-sub").textContent = peak ? fmtTok(peak.total) + " tokens" : "今日暂无";
+    el("m-peak-sub").innerHTML = peak ? tokSpan(peak.total) + " tokens" : "今日暂无";
     el("m-peak").title = peak ? fmtFull(peak.total) + " tokens" : "";
     // 速率：主显示近 1 分钟速率（xx/s），副行小字 xx/min；趋势并入 title
     const rates = data.rates || {};
@@ -87,7 +88,9 @@ function render(data) {
     }
     // 较1小时前：当前小时速率 vs 上一小时速率（%），并入副行与 title
     const hourlyRates = hourRateTrend(d);
-    let subText = perMin != null ? fmt.format(perMin) + "/min" : "tokens / min";
+    let subText = perMin != null
+      ? `<span title="${fmtFull(perMin)} tokens/分钟">${fmt.format(perMin)}/min</span>`
+      : "tokens / min";
     if (hourlyRates != null) {
       const up = hourlyRates >= 0;
       const pct = Math.abs(hourlyRates).toFixed(Math.abs(hourlyRates) >= 10 ? 1 : 2);
@@ -274,7 +277,7 @@ function renderChart(rd) {
     const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
     line.setAttribute("points", pts.join(" "));
     line.setAttribute("fill", "none");
-    line.setAttribute("stroke", "#a855f7");
+    line.setAttribute("stroke", "var(--req)");
     line.setAttribute("stroke-width", "1.2");
     line.setAttribute("vector-effect", "non-scaling-stroke");
     line.setAttribute("stroke-dasharray", "3 2");

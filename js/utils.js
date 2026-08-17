@@ -69,10 +69,13 @@ function fmtYi(n) {
 /** 完整数字（悬浮提示用） */
 function fmtFull(n) { return fmt.format(Math.round(n || 0)); }
 /* ---------- 计价 ---------- */
-/** 取某模型的计价（有按模型覆盖用覆盖，否则默认 prices） */
+/** 取某模型的计价：用户手动覆盖 > 价格目录（内置/同步，js/data.js catalogPriceOf）> 全局默认 prices */
 function priceOf(model) {
   const m = prices.models || {};
-  return (model != null && m[model]) || prices;
+  if (model != null && m[model]) return m[model];
+  const cp = catalogPriceOf(model);
+  if (cp) return cp;
+  return prices;
 }
 /** 单槽位计价：model 参数可选，给了则按该模型（覆盖或默认）计价 */
 function costOf(d, model) {

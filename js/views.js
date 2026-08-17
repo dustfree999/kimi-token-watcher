@@ -148,15 +148,28 @@ window.Views = (function () {
     // 事件流跟随顶部范围筛选（今日 / 近 7 天 / 近 30 天 / 自定义）
     const rl = rangeLabel();
     const validKeys = new Set(rangeDayKeys(data));
-    const evs = (data.recent || []).filter(e => validKeys.has(e.date)).slice(0, evAll ? 200 : 60);
-    const countEl = el("event-count");
-    if (countEl) countEl.textContent = evs.length + " events · " + rl;
+    const isFailScope = evFilter.scope === "failed";
+    // 失败模式从独立失败缓冲读取，避免被 recent 60 条截断
+    const cap = evAll ? 200 : (isFailScope ? 500 : 60);
+    let evs;
+    if (isFailScope) {
+      evs = (data.fails || [])
+        .filter(e => validKeys.has(e.date))
+        .slice(0, cap)
+        .map(e => Object.assign({}, e, { kind: "failed", input: 0, cached: 0, output: 0, total: 0, input_text: "", output_text: "" }));
+    } else {
+      evs = (data.recent || []).filter(e => validKeys.has(e.date)).slice(0, cap);
+    }
     const hint = el("event-follow-hint");
     if (hint) hint.textContent = "每 2 秒自动刷新 · 点击行展开详情 · " + rl;
     let shown = evs;
-    if (evFilter.scope === "main") shown = shown.filter(e => e.scope !== "subagent");
-    else if (evFilter.scope === "sub") shown = shown.filter(e => e.scope === "subagent");
+    if (!isFailScope) {
+      if (evFilter.scope === "main") shown = shown.filter(e => e.scope !== "subagent");
+      else if (evFilter.scope === "sub") shown = shown.filter(e => e.scope === "subagent");
+    }
     if (evFilter.model) shown = shown.filter(e => e.model === evFilter.model);
+    const countEl = el("event-count");
+    if (countEl) countEl.textContent = shown.length + " events · " + rl;
     const sel = el("ev-model-filter");
     if (sel) {
       const models = [...new Set(evs.map(e => e.model).filter(Boolean))].sort();
@@ -170,7 +183,7 @@ window.Views = (function () {
     const slice = shown.slice((pages.events - 1) * EV_PAGE, pages.events * EV_PAGE);
     const rowsEl = el("event-rows");
     if (!rowsEl) return;
-    const sigKey = "ev" + pages.events + "|" + evFilter.scope + "|" + evFilter.model + "|" + (evAll ? "A" : "B") + "|" +
+    const sigKey = "ev" + pages.events + "|" + evFilter.scope + "|" + evFilter.model + "|" + (isFailScope ? "F" : "N") + "|" + (evAll ? "A" : "B") + "|" +
       slice.map(e => keyOf(e)).join(",");
     if (chg(sigKey, slice.map(e => [keyOf(e), e.scope, e.model, e.input, e.cached, e.output, e.kind, e.err_code]))) {
       rowsEl.innerHTML = "";
@@ -181,7 +194,7 @@ window.Views = (function () {
         head.className = "tt-head evt";
         head.innerHTML =
           `<span>时间</span><span>类型</span><span>模型</span><span>主/子</span>` +
-          `<span class="tt-num">输入</span><span class="tt-num">缓存命中</span><span class="tt-num">输出</span>` +
+          `<span class="tt-num">输入</span><span class="tt-num">缓存命中</span><span class="tt-num">命中率</span><span class="tt-num">输出</span>` +
           `<span class="tt-num">总 Tokens</span><span>会话 ID</span><span>操作</span>`;
         rowsEl.appendChild(head);
         for (const ev of slice) {
@@ -228,6 +241,10 @@ window.Views = (function () {
             : '<span class="lbl" style="color:var(--ok);background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);padding:1px 7px;border-radius:999px">usage</span>';
           const row = document.createElement("div");
           row.className = "tt-row evt";
+          const totalIn = (ev.input || 0) + (ev.cached || 0);
+          const cacheRate = isFailed || totalIn === 0
+            ? "—"
+            : ((ev.cached || 0) / totalIn * 100).toFixed(1) + "%";
           row.innerHTML =
             `<span class="tt-num" style="color:var(--muted)">${esc(String(new Date(ev.time).toTimeString().slice(0, 8)))}</span>` +
             `<span>${typeBadge}</span>` +
@@ -235,6 +252,7 @@ window.Views = (function () {
             `<span><span class="ev-scope ${scope}">${scope === "sub" ? "子" : "主"}</span></span>` +
             `<span class="tt-num">${isFailed ? "—" : fmtTok(ev.input)}</span>` +
             `<span class="tt-num">${isFailed ? "—" : fmtTok(ev.cached)}</span>` +
+            `<span class="tt-num">${cacheRate}</span>` +
             (isFailed
               ? `<span class="tt-num">—</span>`
               : `<span class="tt-num" style="color:var(--out)">${fmtTok(ev.output)}</span>`) +
@@ -256,7 +274,9 @@ window.Views = (function () {
       }
     }
     const moreBtn = el("ev-more");
-    if (moreBtn) moreBtn.textContent = evAll ? "收起（60 条）" : "查看全部事件 →";
+    if (moreBtn) moreBtn.textContent = evAll
+      ? `收起（${isFailScope ? 500 : 200} 条）`
+      : (isFailScope ? "查看全部失败 →" : "查看全部事件 →");
     putPager(el("ev-pager"), pages.events, totalPg, p => { pages.events = p; if (current) renderView(current, range); });
   }
 
@@ -329,15 +349,27 @@ window.Views = (function () {
     el("md-req").textContent = fmt.format(mm.requests || 0);
     el("md-calls").textContent = (mm.calls || 0) + " 回合";
     el("md-cost").textContent = "¥" + costOf(mm, model).toFixed(2);
-    // 使用趋势（跟随顶部范围切换）
-    const dKeys = rangeDayKeys(data);
+    // 使用趋势（跟随顶部范围切换）：今日按小时，其他按日
     const rl = rangeLabel();
     const mdSub = el("md-trend-sub");
-    if (mdSub) mdSub.textContent = rl + " · 按日";
-    const bks = dKeys.map(k => {
-      const dm = (((data.days || {})[k] || {}).by_model || {})[model] || {};
-      return { label: k.slice(5), v: [dm.inputOther || 0, dm.inputCacheRead || 0, dm.output || 0] };
-    });
+    const dKeys = rangeDayKeys(data); // 当前范围日期键（今日=[today]），下方失败记录过滤也依赖它
+    let bks;
+    if (range === "today") {
+      if (mdSub) mdSub.textContent = rl + " · 按小时";
+      const mh = ((((data.days || {})[data.today] || {}).by_model || {})[model] || {});
+      const hourly = mh.hourly || {};
+      bks = [];
+      for (let h = 0; h < 24; h++) {
+        const hv = hourly[String(h)] || { input: 0, cached: 0, output: 0 };
+        bks.push({ label: String(h).padStart(2, "0"), v: [hv.input || 0, hv.cached || 0, hv.output || 0] });
+      }
+    } else {
+      if (mdSub) mdSub.textContent = rl + " · 按日";
+      bks = dKeys.map(k => {
+        const dm = (((data.days || {})[k] || {}).by_model || {})[model] || {};
+        return { label: k.slice(5), v: [dm.inputOther || 0, dm.inputCacheRead || 0, dm.output || 0] };
+      });
+    }
     stackedChart(el("md-chart"), el("md-axis"), bks);
     // 会话内分析（当前范围）
     const sessions = Object.values(agg.by_session || {});
@@ -718,36 +750,21 @@ window.Views = (function () {
   function renderSettings() {
     if (!settingsInit) return;
     const ae = document.activeElement;
-    // 轮询重绘时跳过正在编辑的定价输入框，避免覆盖用户输入
+    // 全局默认价：跳过正在编辑的输入框
     if (ae !== el("p-miss")) el("p-miss").value = prices.miss;
     if (ae !== el("p-cache")) el("p-cache").value = prices.cache;
     if (ae !== el("p-cwrite")) el("p-cwrite").value = prices.cwrite;
     if (ae !== el("p-out")) el("p-out").value = prices.out;
-    // 按模型定价行：跳过正在编辑的行，其余从 prices.models 同步
-    const pmRows = el("pm-rows");
-    if (pmRows && !pmRows.contains(ae)) {
-      for (const row of pmRows.querySelectorAll(".pm-row")) {
-        const nm = row.querySelector(".pm-name").value.trim();
-        const mp = nm && (prices.models || {})[nm];
-        if (!mp) continue;
-        const ins = row.querySelectorAll("input");
-        const kk = ["miss", "cache", "cwrite", "out"];
-        for (let i = 0; i < 4; i++) {
-          const inp = ins[i + 1];
-          if (String(inp.value) !== String(mp[kk[i]])) inp.value = mp[kk[i]];
-        }
-      }
+    // 按模型定价表格：如果当前焦点不在表格内则重建，否则只同步来源标签与计数
+    const tbody = el("pm-rows");
+    if (tbody && !tbody.contains(ae)) {
+      buildModelRows();
+    } else if (tbody) {
+      updateModelRowSources();
     }
-    // datalist 模型名：数据中出现过的模型 + 已配置覆盖的模型
-    const dl = el("pm-models");
-    if (dl) {
-      const names = new Set(Object.keys(prices.models || {}));
-      for (const d of Object.values((current && current.days) || {})) {
-        for (const mk of Object.keys(d.by_model || {})) names.add(mk);
-      }
-      const opts = [...names].sort().map(n => `<option value="${esc(n)}"></option>`).join("");
-      if (dl.innerHTML !== opts) dl.innerHTML = opts;
-    }
+    updateModelCount();
+    // 搜索过滤
+    filterModelRows();
     // 告警配置同步（跳过正在编辑的输入框）
     const al = loadAlerts();
     const aEn = el("al-enabled"), aCost = el("al-cost"), aFail = el("al-fail");
@@ -759,39 +776,205 @@ window.Views = (function () {
     document.querySelectorAll("#set-theme button").forEach(b => b.classList.toggle("active", b.dataset.themeMode === theme));
     const density = document.body.dataset.density || "full";
     document.querySelectorAll("#set-density button").forEach(b => b.classList.toggle("active", b.dataset.density === density));
+    // 内置价格目录卡片
+    renderCatalogCard();
+    // 数据管理信息
+    const gsDir = el("gs-dir"), gsFiles = el("gs-files");
+    if (gsDir) gsDir.textContent = current && current.session_root ? current.session_root : state.SESSION_ROOT || "~/.kimi-code/sessions";
+    if (gsFiles) gsFiles.textContent = (current && current.tracked_files != null ? current.tracked_files : "—") + " 个日志文件";
   }
 
-  /* ---------- 设置页：按模型定价行 ---------- */
-  function addModelRow(name, vals) {
-    const wrap = el("pm-rows");
-    if (!wrap) return;
-    const row = document.createElement("div");
-    row.className = "pm-row";
-    const nameInput = document.createElement("input");
-    nameInput.type = "text"; nameInput.className = "pm-name";
-    nameInput.placeholder = "模型名（数据中的模型名）";
-    nameInput.setAttribute("list", "pm-models");
-    nameInput.value = name || "";
-    const priceFields = ["miss", "cache", "cwrite", "out"];
-    const ins = [];
-    for (const k of priceFields) {
-      const inp = document.createElement("input");
-      inp.type = "number"; inp.step = "0.001"; inp.min = "0";
-      inp.value = vals && vals[k] != null ? vals[k] : "";
-      ins.push(inp);
+  /* 获取模型最终生效价的来源标签 */
+  function sourceBadgeOf(model) {
+    const hasManual = (prices.models || {})[model];
+    if (hasManual) return { cls: "manual", text: "手动" };
+    const cp = catalogPriceOf(model);
+    if (cp) return { cls: "catalog", text: "目录" };
+    return { cls: "default", text: "默认" };
+  }
+
+  /* ---------- 设置页：内置价格目录卡片 ---------- */
+  /** 渲染目录卡片的来源/日期/模型数；汇率输入仅在未聚焦且为空时填充默认值 */
+  function renderCatalogCard() {
+    const cat = getCatalog();
+    const srcEl = el("catalog-source"), dateEl = el("catalog-date"), cntEl = el("catalog-count");
+    if (srcEl) srcEl.textContent = (cat && cat.source) ? cat.source : "—";
+    if (dateEl) dateEl.textContent = (cat && cat.fetchedAt) ? cat.fetchedAt : "—";
+    if (cntEl) cntEl.textContent = (cat && cat.models) ? Object.keys(cat.models).length : 0;
+    const rateEl = el("catalog-rate");
+    if (rateEl && document.activeElement !== rateEl && rateEl.value === "") {
+      rateEl.value = (cat && cat.usdToCny) ? cat.usdToCny : 7.2;
     }
-    const del = document.createElement("button");
-    del.type = "button"; del.className = "pm-del"; del.title = "删除该模型定价"; del.textContent = "✕";
-    del.addEventListener("click", () => row.remove());
-    row.append(nameInput, ...ins, del);
-    wrap.appendChild(row);
+  }
+  /** 数值兜底：非数字一律按 0 处理 */
+  function numOf(v) {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  /** 同步在线目录（models.dev）：用户手动触发，换算成元存入 localStorage CATALOG_KEY */
+  async function syncCatalog() {
+    const st = el("catalog-status");
+    const btn = el("catalog-sync");
+    const rate = parseFloat(el("catalog-rate") ? el("catalog-rate").value : "") || 7.2;
+    if (btn) btn.disabled = true;
+    if (st) { st.textContent = "正在从 models.dev 同步价格…"; st.style.color = "var(--text-2)"; }
+    try {
+      const res = await fetch("https://models.dev/api.json", { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const raw = await res.json();
+      // api.json 结构：{ providerId: { name, models: { modelId: { name, cost:{input,cache_read,output}, ... } } } }
+      // 只收录带 cost 的模型，按汇率换算成元/百万 tokens
+      const models = {};
+      for (const [pid, pv] of Object.entries(raw || {})) {
+        const pmodels = (pv && pv.models) || {};
+        for (const [mid, m] of Object.entries(pmodels)) {
+          const cost = m && m.cost;
+          if (!cost || typeof cost !== "object") continue;
+          const usd = { input: numOf(cost.input), cache_read: numOf(cost.cache_read), output: numOf(cost.output) };
+          const tail = mid.split("/").pop();
+          models[mid] = {
+            name: m.name || mid,
+            miss: Math.round(usd.input * rate * 1e6) / 1e6,
+            cache: Math.round(usd.cache_read * rate * 1e6) / 1e6,
+            cwrite: 0,
+            out: Math.round(usd.output * rate * 1e6) / 1e6,
+            usd,
+            aliases: [tail, String(m.name || mid).toLowerCase(), mid],
+          };
+        }
+      }
+      const catalog = {
+        source: "models.dev",
+        fetchedAt: new Date().toISOString().slice(0, 10),
+        usdToCny: rate,
+        models,
+      };
+      try { localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog)); }
+      catch (e) { throw new Error("本地存储不可用"); }
+      if (st) { st.textContent = "已同步 " + Object.keys(models).length + " 个模型价格（元/百万 tokens，汇率 " + rate + "）。"; st.style.color = "var(--ok)"; }
+      renderCatalogCard();
+      if (current) render(current); // 刷新页面费用显示
+    } catch (e) {
+      if (st) { st.textContent = "同步失败：" + (e && e.message ? e.message : e) + "，请检查网络后重试。"; st.style.color = "var(--err)"; }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+  /** 恢复内置目录：删除 localStorage 同步版，回退到静态 PRICING_CATALOG */
+  function restoreCatalog() {
+    try { localStorage.removeItem(CATALOG_KEY); } catch (e) {}
+    const cat = getCatalog();
+    const st = el("catalog-status");
+    if (st) {
+      st.textContent = cat ? "已恢复内置目录（" + cat.source + " · " + cat.fetchedAt + "）。" : "已清除本地目录（当前无内置目录可回退）。";
+      st.style.color = "var(--text-2)";
+    }
+    renderCatalogCard();
+    if (current) render(current);
+  }
+
+  /* ---------- 设置页：按模型定价表格 ---------- */
+  function addModelRow(name, vals) {
+    const tbody = el("pm-rows");
+    if (!tbody) return;
+    const tr = document.createElement("tr");
+    tr.dataset.model = name || "";
+    const source = sourceBadgeOf(name);
+    const priceFields = ["miss", "cache", "cwrite", "out"];
+    const inputsHtml = priceFields.map(k =>
+      `<td><input type="number" step="0.001" min="0" data-field="${k}" value="${vals && vals[k] != null ? esc(String(vals[k])) : ""}"></td>`
+    ).join("");
+    tr.innerHTML =
+      `<td><input type="text" class="pm-name" placeholder="模型名" value="${esc(name || "")}"></td>` +
+      `<td><span class="pm-source ${source.cls}">${source.text}</span></td>` +
+      inputsHtml +
+      `<td><button type="button" class="pm-del" title="删除">✕</button></td>`;
+    tr.querySelector(".pm-del").addEventListener("click", () => tr.remove());
+    // 模型名变化时更新来源标签
+    tr.querySelector(".pm-name").addEventListener("input", () => {
+      tr.dataset.model = tr.querySelector(".pm-name").value.trim();
+      const badge = sourceBadgeOf(tr.dataset.model);
+      const span = tr.querySelector(".pm-source");
+      span.className = "pm-source " + badge.cls;
+      span.textContent = badge.text;
+      filterModelRows();
+    });
+    tbody.appendChild(tr);
+  }
+  /** 更新表格中每行的来源标签（不重建，避免丢失焦点） */
+  function updateModelRowSources() {
+    const tbody = el("pm-rows");
+    if (!tbody) return;
+    for (const tr of tbody.querySelectorAll("tr")) {
+      const nm = tr.querySelector(".pm-name").value.trim();
+      const badge = sourceBadgeOf(nm);
+      const span = tr.querySelector(".pm-source");
+      if (!span) continue;
+      span.className = "pm-source " + badge.cls;
+      span.textContent = badge.text;
+    }
   }
   /** 从 prices.models 重建全部按模型定价行 */
   function buildModelRows() {
-    const wrap = el("pm-rows");
-    if (!wrap) return;
-    wrap.innerHTML = "";
-    for (const [name, vals] of Object.entries(prices.models || {})) addModelRow(name, vals);
+    const tbody = el("pm-rows");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    const models = prices.models || {};
+    if (!Object.keys(models).length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="pm-empty">暂无手动定价模型，可点击「从目录填充」或「+ 添加」。</td></tr>';
+      return;
+    }
+    for (const [name, vals] of Object.entries(models).sort((a, b) => a[0].localeCompare(b[0]))) {
+      addModelRow(name, vals);
+    }
+  }
+  /** 搜索过滤模型表格 */
+  function filterModelRows() {
+    const input = el("pm-search");
+    const tbody = el("pm-rows");
+    if (!input || !tbody) return;
+    const q = input.value.trim().toLowerCase();
+    for (const tr of tbody.querySelectorAll("tr")) {
+      if (tr.querySelector(".pm-empty")) continue;
+      const nm = tr.querySelector(".pm-name").value.toLowerCase();
+      tr.style.display = !q || nm.includes(q) ? "" : "none";
+    }
+  }
+  function updateModelCount() {
+    const cnt = Object.keys(prices.models || {}).length;
+    const elc = el("pm-count");
+    if (elc) elc.textContent = cnt + " 个模型";
+  }
+  /** 从数据中出现过的模型一键生成按模型定价行：价格预填目录价，目录未命中的预填全局默认价；已有行跳过 */
+  function fillFromCatalog() {
+    const tbody = el("pm-rows");
+    if (!tbody || !current) return;
+    const seen = new Set();
+    for (const tr of tbody.querySelectorAll("tr")) {
+      const nm = tr.querySelector(".pm-name")?.value.trim();
+      if (nm) seen.add(nm);
+    }
+    const names = new Set();
+    for (const d of Object.values(current.days || {})) {
+      for (const mk of Object.keys(d.by_model || {})) names.add(mk);
+    }
+    let added = 0;
+    for (const nm of [...names].sort()) {
+      if (seen.has(nm)) continue;
+      const cp = catalogPriceOf(nm);
+      addModelRow(nm, cp || { miss: prices.miss, cache: prices.cache, cwrite: prices.cwrite, out: prices.out });
+      added++;
+    }
+    // 移除空提示行
+    const empty = tbody.querySelector(".pm-empty");
+    if (empty && Object.keys(prices.models || {}).length + added > 0) empty.closest("tr").remove();
+    filterModelRows();
+    updateModelCount();
+    const st = el("pm-fill-status");
+    if (st) {
+      st.textContent = added ? `已填充 ${added} 个模型行，点「保存」生效。` : "无需填充：数据中未出现新模型。";
+      st.style.color = "var(--muted)";
+    }
   }
 
   /* ---------- 设置页：CSV 导出 ---------- */
@@ -917,6 +1100,14 @@ window.Views = (function () {
     // 事件页：查看全部
     const em = el("ev-more");
     if (em) em.addEventListener("click", () => { evAll = !evAll; if (current) renderView(current, range); });
+    // 设置页：标签切换
+    document.querySelectorAll(".settings-tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        const target = tab.dataset.tab;
+        document.querySelectorAll(".settings-tab").forEach(t => t.classList.toggle("active", t === tab));
+        document.querySelectorAll(".settings-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === target));
+      });
+    });
     // 设置页：定价表单
     const ps = el("set-price-save");
     if (ps) {
@@ -925,38 +1116,70 @@ window.Views = (function () {
         prices.cache = parseFloat(el("p-cache").value) || 0;
         prices.cwrite = parseFloat(el("p-cwrite").value) || 0;
         prices.out = parseFloat(el("p-out").value) || 0;
-        // 按模型定价行：模型名非空的行写入 prices.models
-        prices.models = prices.models || {};
-        const pmRows = el("pm-rows");
-        if (pmRows) {
-          for (const row of pmRows.querySelectorAll(".pm-row")) {
-            const nm = row.querySelector(".pm-name").value.trim();
-            if (!nm) continue;
-            const ins = row.querySelectorAll("input");
-            prices.models[nm] = {
-              miss: parseFloat(ins[1].value) || 0,
-              cache: parseFloat(ins[2].value) || 0,
-              cwrite: parseFloat(ins[3].value) || 0,
-              out: parseFloat(ins[4].value) || 0,
-            };
+        // 按模型定价表格：模型名非空的行写入 prices.models
+        prices.models = {};
+        const tbody = el("pm-rows");
+        if (tbody) {
+          for (const tr of tbody.querySelectorAll("tr")) {
+            const nm = tr.querySelector(".pm-name")?.value.trim();
+            if (!nm || tr.querySelector(".pm-empty")) continue;
+            const vals = {};
+            let hasValue = false;
+            for (const inp of tr.querySelectorAll("input[data-field]")) {
+              const v = inp.value.trim();
+              if (v !== "") hasValue = true;
+              vals[inp.dataset.field] = parseFloat(v) || 0;
+            }
+            // 只填了模型名、未填任何价格：跳过该行，避免全 0 覆盖目录/默认价
+            if (!hasValue) continue;
+            prices.models[nm] = vals;
           }
         }
         savePrices();
+        buildModelRows();
+        updateModelCount();
+        const st = el("pm-fill-status");
+        if (st) { st.textContent = "已保存"; st.style.color = "var(--ok)"; setTimeout(() => st.textContent = "", 1500); }
         if (current) render(current);
       });
     }
     const pr = el("set-price-reset");
     if (pr) pr.addEventListener("click", () => {
-      prices = { ...DEFAULT_PRICES, models: {} }; // 含 models:{}（独立对象），一并清空按模型覆盖
+      prices = { ...DEFAULT_PRICES, models: {} };
       savePrices();
       buildModelRows();
+      updateModelCount();
       renderSettings();
       if (current) render(current);
     });
-    // 按模型定价：添加行 + 初始重建
+    const pmc = el("pm-clear");
+    if (pmc) pmc.addEventListener("click", () => {
+      prices.models = {};
+      savePrices();
+      buildModelRows();
+      updateModelCount();
+      if (current) render(current);
+    });
+    // 按模型定价：添加行 + 搜索 + 初始重建
     const pma = el("pm-add");
-    if (pma) pma.addEventListener("click", () => addModelRow("", null));
+    if (pma) pma.addEventListener("click", () => {
+      const tbody = el("pm-rows");
+      const empty = tbody?.querySelector(".pm-empty");
+      if (empty) empty.closest("tr").remove();
+      addModelRow("", null);
+      updateModelCount();
+    });
+    const pmf = el("pm-fill");
+    if (pmf) pmf.addEventListener("click", fillFromCatalog);
+    const pms = el("pm-search");
+    if (pms) pms.addEventListener("input", filterModelRows);
     buildModelRows();
+    updateModelCount();
+    // 内置价格目录：同步在线 / 恢复内置
+    const cs = el("catalog-sync");
+    if (cs) cs.addEventListener("click", syncCatalog);
+    const cr = el("catalog-restore");
+    if (cr) cr.addEventListener("click", restoreCatalog);
     // 告警通知面板
     const aEn = el("al-enabled");
     if (aEn) aEn.addEventListener("change", () => {

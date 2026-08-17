@@ -26,17 +26,25 @@ async function refresh() {
   if (inflight) return; // 上一次请求未完成时跳过本次
   inflight = true;
   try {
-    const resp = await fetch("/api/usage", { cache: "no-store" });
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const data = await resp.json();
+    let data;
+    try {
+      const resp = await fetch("/api/usage", { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      data = await resp.json();
+    } catch (e) {
+      // 网络 / HTTP 错误：连接失败
+      const badge = el("conn-status");
+      badge.querySelector(".dot").className = "dot err";
+      badge.lastChild.textContent = " 连接失败";
+      el("last-refresh").textContent = String(e);
+      return;
+    }
     render(data);
     // 告警通知检查（今日费用 / 失败次数超阈值）
     if (window.Views && window.Views.checkAlerts) window.Views.checkAlerts(data);
   } catch (e) {
-    const badge = el("conn-status");
-    badge.querySelector(".dot").className = "dot err";
-    badge.lastChild.textContent = " 连接失败";
-    el("last-refresh").textContent = String(e);
+    // 渲染异常与连接无关，单独展示真实错误，避免误报“连接失败”
+    el("last-refresh").textContent = "渲染异常: " + e;
   } finally {
     inflight = false;
   }
@@ -70,7 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (current) render(current);
   });
 
-  // 事件流过滤：范围（全部/主/子）+ 模型下拉
+  // 事件流过滤：范围（全部/主/子/失败）+ 模型下拉
   el("ev-filter-scope").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-scope]");
     if (!btn) return;

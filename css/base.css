@@ -53,7 +53,7 @@ body {
 .mono { font-family: var(--mono); }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #21262d; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 
 button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
   outline: 2px solid rgba(240,136,62,.5);
@@ -71,4 +71,4 @@ html[data-theme="light"] {
   --ok: #1a7f37; --err: #cf222e; --warn: #9a6700;
 }
 html[data-theme="light"] .chart { background-image: repeating-linear-gradient(to top, rgba(0,0,0,.03) 0, rgba(0,0,0,.03) 1px, transparent 1px, transparent 25%); }
-html[data-theme="light"] .tt-row:hover { background: rgba(0,0,0,.02); }
+html[data-theme="light"] .tt-row:hover { background: rgba(0,0,0,.04); }

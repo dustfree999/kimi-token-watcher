@@ -83,9 +83,24 @@ def _model_slot(s, model):
     if m is None:
         m = {"model": model, "inputOther": 0, "inputCacheRead": 0,
              "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0,
-             "failed": 0}
+             "failed": 0, "hourly": {}}
         s["by_model"][model] = m
+    elif "hourly" not in m:
+        # 兼容旧存档：已存在但无 hourly 的模型槽位补齐
+        m["hourly"] = {}
     return m
+
+
+def _model_hour_slot(m, h):
+    """by_model[model] 下按小时聚合的槽位。"""
+    key = str(h)
+    if "hourly" not in m:
+        m["hourly"] = {}
+    hh = m["hourly"].get(key)
+    if hh is None:
+        hh = {"input": 0, "cached": 0, "output": 0, "calls": 0, "requests": 0, "cacheWrite": 0}
+        m["hourly"][key] = hh
+    return hh
 
 
 def _session_slot(s, session):
@@ -231,6 +246,12 @@ def apply_record(rec):
         sh["output"] = sh.get("output", 0) + out
         sh["calls"] = sh.get("calls", 0) + 1
         sh["cacheWrite"] = sh.get("cacheWrite", 0) + creation
+        mh = _model_hour_slot(m, h)
+        mh["input"] = mh.get("input", 0) + other
+        mh["cached"] = mh.get("cached", 0) + cached
+        mh["output"] = mh.get("output", 0) + out
+        mh["calls"] = mh.get("calls", 0) + 1
+        mh["cacheWrite"] = mh.get("cacheWrite", 0) + creation
 
         # 实时事件流：保留最近若干条原始记录（eventId 服务运行期内唯一）
         state_recent = STATE["recent"]

@@ -150,3 +150,6 @@
 @media (max-width: 1200px) { .tri { grid-template-columns: 1fr; } }
 .grid-2sub { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; margin-bottom: 16px; }
 @media (max-width: 1000px) { .grid-2sub { grid-template-columns: 1fr; } }
+
+/* ---------- 浅色主题覆盖 ---------- */
+html[data-theme="light"] .sb-brand { box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 1px 0 rgba(0,0,0,.08); }
