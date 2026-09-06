@@ -8,3 +8,4 @@ data.json.migrated-*.bak
 data.json.corrupt-*.bak
 *.tmp
 .playwright-cli/
+demo_sessions/
