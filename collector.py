@@ -17,7 +17,7 @@ import re
 import time
 
 import state
-from aggregate import apply_record, apply_request, apply_turn_end, apply_turn_end
+from aggregate import apply_record, apply_request, apply_turn_end
 
 SESSION_ID_RE = re.compile(r"[/\\](session_[0-9a-f-]+|ses_[0-9a-f-]+)[/\\]")
 
@@ -400,3 +400,230 @@ def boot_replay():
     except Exception as e:
         with state.LOCK:
             state.STATE["scan_errors"] = [str(e)]
+
+
+def _recent_usage_entry(ts, model, session, scope, source, other, cached, out):
+    """构造一条 usage 类型的 recent 条目（不含 eventId，finalize 时统一编号）。"""
+    from aggregate import day_of, hour_of
+    return {
+        "time": int(ts), "date": day_of(ts), "hour": hour_of(ts),
+        "model": model or "(unknown)", "session": session, "scope": scope,
+        "input": int(other), "cached": int(cached), "output": int(out),
+        "total": int(other + cached + out),
+        "kind": "usage", "source": source,
+        "input_text": "", "output_text": "",
+    }
+
+
+def _recent_failed_entry(ts, model, session, scope, source, err_code, err_msg):
+    """构造一条 failed 类型的 recent 条目（不含 eventId）。"""
+    from aggregate import day_of, hour_of
+    return {
+        "time": int(ts), "date": day_of(ts), "hour": hour_of(ts),
+        "model": model or "(unknown)", "session": session, "scope": scope,
+        "input": 0, "cached": 0, "output": 0, "total": 0,
+        "kind": "failed", "source": source,
+        "err_code": err_code or "", "err_msg": (err_msg or "")[:300],
+        "input_text": "", "output_text": "",
+    }
+
+
+def _backfill_kimi_recent(cutoff_ms, fails_out):
+    """重读最近 RECENT_BACKFILL_DAYS 天有改动的 wire.jsonl，把其中的
+    usage.record / turn.ended(failed) 转成 recent/fails 展示条目。
+    只补展示层：不走 apply_record/apply_turn_end，不动聚合与去重指纹。
+    返回 recent 条目列表；fails 条目追加进 fails_out。"""
+    items = []
+    for path in list_wires(state.SESSION_ROOT):
+        try:
+            # 文件最后修改时间早于回补窗口，里面不可能有窗口内事件
+            if os.path.getmtime(path) * 1000 < cutoff_ms:
+                continue
+        except OSError:
+            continue
+        session = session_id_of(path)
+        scope = scope_of(path)
+        last_model = "(unknown)"
+        try:
+            fh = open(path, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for ln in fh:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    obj = json.loads(ln)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                etype = obj.get("type")
+                if etype == "llm.request":
+                    last_model = obj.get("modelAlias") or obj.get("model") or "(unknown)"
+                    continue
+                ts = obj.get("time") or 0
+                if not isinstance(ts, (int, float)) or ts < cutoff_ms:
+                    continue
+                # fork 会话复制段与聚合层口径一致，跳过避免展示重复
+                if is_fork_copy(session, ts):
+                    continue
+                if etype == "usage.record":
+                    if obj.get("usageScope") == "session":
+                        continue
+                    us = obj.get("usage") or {}
+                    other = us.get("inputOther") or 0
+                    cached = us.get("inputCacheRead") or 0
+                    out = us.get("output") or 0
+                    items.append(_recent_usage_entry(
+                        ts, obj.get("model"), session, scope, "kimi",
+                        other, cached, out))
+                elif etype == "turn.ended" and obj.get("reason") == "failed":
+                    err = obj.get("error") or {}
+                    items.append(_recent_failed_entry(
+                        ts, last_model, session, scope, "kimi",
+                        err.get("code"), err.get("message")))
+                    fails_out.append({
+                        "time": int(ts),
+                        "date": items[-1]["date"],
+                        "hour": items[-1]["hour"],
+                        "model": last_model, "session": session, "scope": scope,
+                        "source": "kimi",
+                        "err_code": err.get("code") or "",
+                        "err_msg": (err.get("message") or "")[:300],
+                    })
+    return items
+
+
+def backfill_recent():
+    """一次性回补：把最近 RECENT_BACKFILL_DAYS 天的历史事件补进 recent/fails
+    展示缓冲（kimi wire + zcode 库 + dsh 文件）。
+    背景：recent 是滚动缓冲，旧事件会被新事件物理挤出，增量扫描永远
+    不会重读历史，扩容 RECENT_LIMIT 只对未来生效——需要一次性重读历史。
+    只补展示层，不走 apply_record/apply_turn_end，聚合统计与去重指纹
+    完全不受影响；与现有 recent/fails 按内容键去重，天然幂等。
+    完成后置 state.RECENT_BACKFILL_DONE 并持久化，后续启动跳过。"""
+    if state.RECENT_BACKFILL_DONE:
+        return
+    if not state.STATE["tracked_files"]:
+        # 全新安装（无存档）：boot_replay 的 scan_once 已从头全量扫描，
+        # 历史事件已全部进 recent，无需回补
+        state.RECENT_BACKFILL_DONE = True
+        return
+    cutoff = time.time() * 1000 - state.RECENT_BACKFILL_DAYS * 86400 * 1000
+    items = []
+    fails = []
+    try:
+        items += _backfill_kimi_recent(cutoff, fails)
+    except Exception as e:
+        state.add_error(f"recent backfill kimi: {e}")
+    # 延迟导入：collector_zcode/collector_dsh 均 import aggregate，
+    # 模块级导入会造成 collector <-> collector_zcode 循环依赖
+    try:
+        import collector_zcode
+        zi, zf = collector_zcode.backfill_recent(cutoff)
+        items += zi
+        fails += zf
+    except Exception as e:
+        state.add_error(f"recent backfill zcode: {e}")
+    try:
+        import collector_dsh
+        di, df = collector_dsh.backfill_recent(cutoff)
+        items += di
+        fails += df
+    except Exception as e:
+        state.add_error(f"recent backfill dsh: {e}")
+    try:
+        import collector_oai
+        oi, of_ = collector_oai.backfill_recent(cutoff)
+        items += oi
+        fails += of_
+    except Exception as e:
+        state.add_error(f"recent backfill oai: {e}")
+
+    with state.LOCK:
+        recent = state.STATE["recent"]
+        # 与现有事件按内容键去重（同毫秒同会话同模型同 token 的重复概率极低）
+        seen = {(r.get("time"), r.get("session"), r.get("model"), r.get("kind"),
+                 r.get("input"), r.get("cached"), r.get("output")) for r in recent}
+        added = 0
+        for it in items:
+            key = (it["time"], it["session"], it["model"], it["kind"],
+                   it["input"], it["cached"], it["output"])
+            if key in seen:
+                continue
+            seen.add(key)
+            recent.append(it)
+            added += 1
+        state_fails = state.STATE["fails"]
+        seen_f = {(f.get("time"), f.get("session"), f.get("model")) for f in state_fails}
+        added_f = 0
+        for f in fails:
+            key = (f["time"], f["session"], f["model"])
+            if key in seen_f:
+                continue
+            seen_f.add(key)
+            state_fails.append(f)
+            added_f += 1
+        # 按时间重排并统一重编 eventId（一次性；浏览器展开状态失效可接受）
+        recent.sort(key=lambda r: r.get("time") or 0)
+        if len(recent) > state.RECENT_LIMIT:
+            del recent[: len(recent) - state.RECENT_LIMIT]
+        for i, r in enumerate(recent):
+            r["eventId"] = i
+        state.STATE["recent_seq"] = len(recent)
+        state_fails.sort(key=lambda f: f.get("time") or 0)
+        if len(state_fails) > state.FAILS_LIMIT:
+            del state_fails[: len(state_fails) - state.FAILS_LIMIT]
+    state.RECENT_BACKFILL_DONE = True
+    state.save_state()
+    print(f"[kimi-token-watcher] 事件流历史回补完成：新增 {added} 条事件 / {added_f} 条失败明细"
+          f"（窗口 {state.RECENT_BACKFILL_DAYS} 天）")
+
+
+def backfill_ext_text():
+    """一次性回填：给已在事件流里的 zcode/dsh 历史事件补上输入/输出文本。
+    旧版本采集器不挂文本，升级后已有事件 input_text/output_text 为空；
+    复用两个采集器的 backfill_recent（cutoff=0 全量）重建 (time, session, model)
+    → 文本映射，原地更新 STATE["recent"]（只补文本，不动其他任何字段）。
+    完成后置 state.EXT_TEXT_BACKFILL_DONE 并持久化，后续启动跳过。"""
+    if state.EXT_TEXT_BACKFILL_DONE:
+        return
+    textmap = {}
+    try:
+        import collector_zcode
+        for it in collector_zcode.backfill_recent(0)[0]:
+            if it.get("input_text") or it.get("output_text"):
+                textmap[(it["time"], it["session"], it["model"])] = (
+                    it["input_text"], it["output_text"])
+    except Exception as e:
+        state.add_error(f"ext text backfill zcode: {e}")
+    try:
+        import collector_dsh
+        for it in collector_dsh.backfill_recent(0)[0]:
+            if it.get("input_text") or it.get("output_text"):
+                textmap[(it["time"], it["session"], it["model"])] = (
+                    it["input_text"], it["output_text"])
+    except Exception as e:
+        state.add_error(f"ext text backfill dsh: {e}")
+    n = 0
+    with state.LOCK:
+        for r in state.STATE["recent"]:
+            if (r.get("source") or "kimi") == "kimi":
+                continue
+            if r.get("input_text") or r.get("output_text"):
+                continue
+            t = textmap.get((r.get("time"), r.get("session"), r.get("model")))
+            if t:
+                r["input_text"], r["output_text"] = t
+                n += 1
+    state.EXT_TEXT_BACKFILL_DONE = True
+    state.save_state()
+    print(f"[kimi-token-watcher] 外部源事件文本回填完成：补文本 {n} 条")
+
+
+def backfill_all():
+    """启动后台线程入口：事件流历史回补 + 外部源文本回填（各自带一次性标记）。"""
+    backfill_recent()
+    backfill_ext_text()
