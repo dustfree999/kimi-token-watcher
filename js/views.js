@@ -924,31 +924,39 @@ window.Views = (function () {
       const res = await fetch("https://models.dev/api.json", { cache: "no-store" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const raw = await res.json();
-      // api.json 结构：{ providerId: { name, models: { modelId: { name, cost:{input,cache_read,output}, ... } } } }
-      // 只收录带 cost 的模型，按汇率换算成元/百万 tokens
+      // api.json 结构：{ providerId: { name, models: { modelId: { name, cost:{input,cache_read,cache_write,output}, ... } } } }
+      // 只收录带 cost 且不全为 0 的模型（订阅套餐全 0，收录会以 0 元计价），按汇率换算成元/百万 tokens
       const models = {};
       for (const [pid, pv] of Object.entries(raw || {})) {
         const pmodels = (pv && pv.models) || {};
         for (const [mid, m] of Object.entries(pmodels)) {
           const cost = m && m.cost;
           if (!cost || typeof cost !== "object") continue;
-          const usd = { input: numOf(cost.input), cache_read: numOf(cost.cache_read), output: numOf(cost.output) };
+          const usd = { input: numOf(cost.input), cache_read: numOf(cost.cache_read), cache_write: numOf(cost.cache_write), output: numOf(cost.output) };
+          if (!usd.input && !usd.cache_read && !usd.cache_write && !usd.output) continue; // 全零价条目（订阅套餐）跳过
           const tail = mid.split("/").pop();
-          models[mid] = {
+          models[pid + "/" + mid] = {
             name: m.name || mid,
             miss: Math.round(usd.input * rate * 1e6) / 1e6,
             cache: Math.round(usd.cache_read * rate * 1e6) / 1e6,
-            cwrite: 0,
+            cwrite: Math.round(usd.cache_write * rate * 1e6) / 1e6,
             out: Math.round(usd.output * rate * 1e6) / 1e6,
             usd,
             aliases: [tail, String(m.name || mid).toLowerCase(), mid],
           };
         }
       }
+      // 合并内置目录中在线没有的修正条目（如 kimi-for-coding/* 订阅折算价），在线数据始终优先
+      if (typeof PRICING_CATALOG !== "undefined" && PRICING_CATALOG && PRICING_CATALOG.models) {
+        for (const [id, m] of Object.entries(PRICING_CATALOG.models)) {
+          if (!models[id] && (m.miss || m.cache || m.cwrite || m.out)) models[id] = m;
+        }
+      }
       const catalog = {
         source: "models.dev",
         fetchedAt: new Date().toISOString().slice(0, 10),
         usdToCny: rate,
+        rev: 2,
         models,
       };
       try { localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog)); }

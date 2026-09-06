@@ -33,20 +33,26 @@ function savePrices() { localStorage.setItem(PRICE_KEY, JSON.stringify(prices));
 /* ---------- 内置价格目录（models.dev，元/百万 tokens） ---------- */
 const CATALOG_KEY = "kimi_token_price_catalog"; // localStorage 存用户手动同步下来的目录
 
-/** 取当前生效的价格目录：优先 localStorage 同步版，其次内置静态 PRICING_CATALOG（js/pricing-catalog.js），都没有返回 null */
+/** 取当前生效的价格目录：优先 localStorage 同步版（rev≥2，含缓存写入价且无全零条目），其次内置静态 PRICING_CATALOG（js/pricing-catalog.js），都没有返回 null */
 function getCatalog() {
   try {
     const raw = localStorage.getItem(CATALOG_KEY);
     if (raw) {
       const c = JSON.parse(raw);
-      if (c && c.models) return c;
+      // rev < 2 的旧同步目录缺缓存写入价且含全零订阅条目，忽略并回落内置目录（重新「同步在线目录」即升级）
+      if (c && c.models && (c.rev || 0) >= 2) return c;
     }
   } catch (e) {}
   if (typeof PRICING_CATALOG !== "undefined" && PRICING_CATALOG && PRICING_CATALOG.models) return PRICING_CATALOG;
   return null;
 }
 
-/** 在价格目录中按策略匹配模型，命中返回 {miss, cache, cwrite:0, out}（元/百万 tokens），未命中返回 null */
+/** 价格匹配分段：小写后按分隔符切分；保留版本号中的点（5.3 不拆成 5/3，防 glm-5 吸附 glm-5.3-flash） */
+function priceSegs(s) {
+  return String(s).toLowerCase().split(/[-_@\s/]+/).filter(Boolean);
+}
+
+/** 在价格目录中按策略匹配模型，命中返回 {miss, cache, cwrite, out}（元/百万 tokens），未命中返回 null */
 function catalogPriceOf(model) {
   if (model == null) return null;
   const cat = getCatalog();
@@ -55,7 +61,7 @@ function catalogPriceOf(model) {
   const target = String(model).trim();
   if (!target) return null;
 
-  // 命中的目录条目 → 统一输出 4 槽位（cwrite 目录没有就补 0）
+  // 命中的目录条目 → 统一输出 4 槽位
   const hit = id => {
     const m = models[id];
     if (!m) return null;
@@ -66,29 +72,57 @@ function catalogPriceOf(model) {
       out: m.out || 0,
     };
   };
+  const hasPrice = m => m && ((m.miss || 0) + (m.cache || 0) + (m.cwrite || 0) + (m.out || 0)) > 0;
 
-  // 1. 精确匹配
-  if (models[target]) return hit(target);
-  // 2. 双方小写后匹配
+  // 1. 精确匹配（原样 / 小写）
+  if (models[target] && hasPrice(models[target])) return hit(target);
   const lower = target.toLowerCase();
-  if (models[lower]) return hit(lower);
-  // 3. aliases 小写匹配
+  if (models[lower] && hasPrice(models[lower])) return hit(lower);
+  // 2. aliases 小写精确匹配
   for (const [id, m] of Object.entries(models)) {
-    if (m.aliases && m.aliases.some(a => String(a).toLowerCase() === lower)) return hit(id);
+    if (m.aliases && hasPrice(m) && m.aliases.some(a => String(a).toLowerCase() === lower)) return hit(id);
   }
-  // 4. 模糊匹配：去掉 provider 前缀（如 火山codingplan/Kimi-K2.7-Code → Kimi-K2.7-Code）、转小写、去空格后，
-  //    与目录模型 ID 的尾部或 aliases 做包含匹配
-  const norm = target.split("/").pop().toLowerCase().replace(/\s+/g, "");
-  if (norm && norm.length >= 3) {
+  // 3. 分段模糊匹配：收集全部候选，按「有价 > 匹配精度（全等 > 后缀 > 前缀）」分组，
+  //    组内对价格四元组做多数票（众数价 = 官方/公允价，渠道加价条目为少数），
+  //    杜绝子串吸附（gpt-5.6-luna 不再被 gpt-5 吸附）与渠道异常价抢先（abacus 加价 7 倍的 luna 不再压过官方价）
+  const normSegs = priceSegs(target.split("/").pop());
+  if (normSegs.length && normSegs.join("").length >= 2) {
+    const cands = [];
     for (const [id, m] of Object.entries(models)) {
-      const idNorm = String(id).toLowerCase().replace(/\s+/g, "");
-      if (idNorm === norm || idNorm.endsWith(norm)) return hit(id);
-      if (m.aliases) {
-        for (const a of m.aliases) {
-          const an = String(a).toLowerCase().replace(/\s+/g, "");
-          if (an === norm || an.includes(norm) || norm.includes(an)) return hit(id);
-        }
+      const segsList = [priceSegs(id.split("/").pop())];
+      if (m.aliases) for (const a of m.aliases) segsList.push(priceSegs(a));
+      for (const segs of segsList) {
+        if (!segs.length) continue;
+        if (segs.length === normSegs.length && segs.every((s, i) => s === normSegs[i])) { cands.push([hasPrice(m) ? 1 : 0, 4, id, m]); continue; }
+        // 后缀：目录键比目标更具体（k2.6 → alibaba-cn/kimi-k2.6）
+        if (segs.length > normSegs.length && segs.slice(-normSegs.length).every((s, i) => s === normSegs[i])) { cands.push([hasPrice(m) ? 1 : 0, 3, id, m]); continue; }
+        // 前缀：目录键是目标的基础名（glm-5.2-0414 → glm-5.2）；版本段不同（glm-5 vs glm-5.3-x）不会相等
+        if (segs.length < normSegs.length && normSegs.slice(0, segs.length).every((s, i) => s === segs[i])) { cands.push([hasPrice(m) ? 1 : 0, 2, id, m]); }
       }
+    }
+    if (cands.length) {
+      // 最高组：（有价, 精度）字典序最大
+      let top = cands[0];
+      for (const c of cands) if ((c[0] > top[0]) || (c[0] === top[0] && c[1] > top[1])) top = c;
+      let pool = cands.filter(c => c[0] + ":" + c[1] === top[0] + ":" + top[1]);
+      // 渠道提示：目标 id 路径中的 provider 段（如 Sub2API/deepseek/… 的 deepseek）
+      // 与候选条目一级 provider 相同 → 优先（官方/上游条目压过同名网关条目）
+      const pathSegs = priceSegs(target);
+      const providerSegs = pathSegs.slice(0, pathSegs.length - normSegs.length);
+      if (providerSegs.length) {
+        const boosted = pool.filter(c => providerSegs.includes(String(c[2]).split("/")[0].toLowerCase()));
+        if (boosted.length) pool = boosted;
+      }
+      // 组内多数票：价格四元组出现次数最多者胜（插入序稳定，Map 保序）
+      const freq = new Map();
+      for (const c of pool) {
+        const k = [c[3].miss || 0, c[3].cache || 0, c[3].cwrite || 0, c[3].out || 0].join("|");
+        freq.set(k, (freq.get(k) || 0) + 1);
+      }
+      let bestTuple = null, bestCount = 0;
+      for (const [k, n] of freq) if (n > bestCount) { bestCount = n; bestTuple = k; }
+      const winner = pool.find(c => (c[3].miss || 0) + "|" + (c[3].cache || 0) + "|" + (c[3].cwrite || 0) + "|" + (c[3].out || 0) === bestTuple);
+      if (winner) return hit(winner[2]);
     }
   }
   return null;
