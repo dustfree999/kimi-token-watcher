@@ -62,11 +62,19 @@
       <div style="color:var(--muted);margin-bottom:2px;">版本</div>
       <div class="mono" style="margin-bottom:8px;">v1.0.0</div>
       <div class="sb-divider"></div>
-      <label class="theme-toggle" title="切换深浅色主题">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        <span>深色模式</span>
-        <button class="toggle-switch on" id="theme-toggle" aria-label="深色模式"></button>
-      </label>
+      <div class="style-picker">
+        <div class="style-picker-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="19" cy="13" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="10" cy="19" r="2.5"/></svg>
+          <span>界面风格</span>
+        </div>
+        <select id="style-select" aria-label="切换界面风格">
+          <option value="dark">暗色 · 默认</option>
+          <option value="light">浅色 · 明快</option>
+          <option value="minimal">暖白 · 极简编辑</option>
+          <option value="terminal">终端 · 战术面板</option>
+          <option value="glass">暗夜 · 玻璃拟态</option>
+        </select>
+      </div>
     </div>
   </aside>
 
@@ -523,10 +531,13 @@
                 <div class="panel-head"><div class="pt"><h2>系统设置</h2></div></div>
                 <div class="system-grid">
                   <div class="system-card">
-                    <span class="sc-label">主题模式</span>
+                    <span class="sc-label">主题风格</span>
                     <div class="seg" id="set-theme">
-                      <button data-theme-mode="dark" class="active">深色</button>
-                      <button data-theme-mode="light">浅色</button>
+                      <button data-style="dark" class="active">暗色</button>
+                      <button data-style="light">浅色</button>
+                      <button data-style="minimal">极简</button>
+                      <button data-style="terminal">终端</button>
+                      <button data-style="glass">玻璃</button>
                     </div>
                   </div>
                   <div class="system-card">

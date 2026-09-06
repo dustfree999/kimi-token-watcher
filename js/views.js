@@ -30,8 +30,22 @@ window.Views = (function () {
     settings: ["设置", "系统与定价配置"],
   };
   const NAV_OF = { "model-detail": "models", "session-detail": "sessions" };
-  const CAT_COLORS = ["#f59e0b", "#3b82f6", "#ec4899", "#8b5cf6"];
+  /* 费用四分类调色板：经 CSS 变量取色（见 base.css --cc-*），随主题切换 */
+  const CAT_COLORS = ["var(--cc-0)", "var(--cc-1)", "var(--cc-2)", "var(--cc-3)"];
   const CAT_LABELS = ["输入未命中", "缓存命中", "缓存写入", "输出"];
+
+  /* ---------- 界面风格（多主题） ---------- */
+  /** 全部可用风格 id（html[data-theme] 取值），与设置页/侧栏选择器一致 */
+  const STYLES = ["dark", "light", "minimal", "terminal", "glass"];
+  /** 应用指定风格并持久化（localStorage 兼容旧键 kimi_theme 的 dark/light 值） */
+  function applyStyle(id) {
+    if (!STYLES.includes(id)) return;
+    document.documentElement.dataset.theme = id;
+    try { localStorage.setItem("kimi_theme", id); } catch (er) { /* ignore */ }
+    const sel = el("style-select");
+    if (sel) sel.value = id;
+    renderSettings();
+  }
 
   function el(id) { return document.getElementById(id); }
   function chg(key, val) {
@@ -51,11 +65,11 @@ window.Views = (function () {
   function hitCls(p) { return p >= 90 ? "pct-good" : p >= 70 ? "pct-warn" : "pct-bad"; }
   /** 费用语义色：>=2 红 / >=1 黄 / 其他绿（¥） */
   function costCls(c) { return c >= 2 ? "cost-high" : c >= 1 ? "cost-mid" : "cost-low"; }
-  /** 模型字形徽标（配合 MODEL_COLORS 循环取色） */
+  /** 模型字形徽标（经 --mc-N / --mc-N-soft 变量取色，随主题切换） */
   const GLYPHS = ["★", "●", "■", "▲", "◆", "✚", "●", "◆", "★", "✚"];
   function modelBadge(i) {
-    const c = MODEL_COLORS[i % MODEL_COLORS.length];
-    return '<span class="model-badge" style="background:' + c + '22;color:' + c + '">' + GLYPHS[i % GLYPHS.length] + "</span>";
+    const n = i % MODEL_COLORS.length;
+    return '<span class="model-badge" style="background:var(--mc-' + n + '-soft);color:var(--mc-' + n + ')">' + GLYPHS[i % GLYPHS.length] + "</span>";
   }
   /** 按当前全局范围聚合日数据 */
   function aggDay(data) { return buildRangeData(data).day; }
@@ -857,9 +871,11 @@ window.Views = (function () {
     if (aEn) aEn.checked = al.enabled;
     if (aCost && ae !== aCost && String(aCost.value) !== String(al.costLimit)) aCost.value = al.costLimit > 0 ? al.costLimit : "";
     if (aFail && ae !== aFail && String(aFail.value) !== String(al.failLimit)) aFail.value = al.failLimit > 0 ? al.failLimit : "";
-    // 主题/密度按钮同步
-    const theme = document.documentElement.dataset.theme || "dark";
-    document.querySelectorAll("#set-theme button").forEach(b => b.classList.toggle("active", b.dataset.themeMode === theme));
+    // 风格/密度按钮同步（侧栏下拉随 html[data-theme] 联动）
+    const styleId = document.documentElement.dataset.theme || "dark";
+    document.querySelectorAll("#set-theme button").forEach(b => b.classList.toggle("active", b.dataset.style === styleId));
+    const styleSel = el("style-select");
+    if (styleSel) styleSel.value = styleId;
     const density = document.body.dataset.density || "full";
     document.querySelectorAll("#set-density button").forEach(b => b.classList.toggle("active", b.dataset.density === density));
     // 内置价格目录卡片
@@ -1286,18 +1302,15 @@ window.Views = (function () {
     if (exD) exD.addEventListener("click", exportDailyCSV);
     const exM = el("export-models-csv");
     if (exM) exM.addEventListener("click", exportModelsCSV);
-    // 主题模式
+    // 主题风格：设置页分段控件 + 侧栏下拉（共用 applyStyle，双入口互相同步）
     document.querySelectorAll("#set-theme button").forEach(b => {
-      b.addEventListener("click", () => {
-        document.documentElement.dataset.theme = b.dataset.themeMode;
-        try { localStorage.setItem("kimi_theme", b.dataset.themeMode); } catch (er) { /* ignore */ }
-        renderSettings();
-      });
+      b.addEventListener("click", () => applyStyle(b.dataset.style));
     });
+    const styleSel = el("style-select");
+    if (styleSel) styleSel.addEventListener("change", () => applyStyle(styleSel.value));
     const savedTheme = (() => { try { return localStorage.getItem("kimi_theme"); } catch (er) { return null; } })();
-    if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-    const sbT = el("theme-toggle");
-    if (sbT) sbT.classList.toggle("on", (document.documentElement.dataset.theme || "dark") === "dark");
+    if (savedTheme && STYLES.includes(savedTheme)) document.documentElement.dataset.theme = savedTheme;
+    if (styleSel) styleSel.value = document.documentElement.dataset.theme || "dark";
     // 显示模式（简洁/完整）
     document.querySelectorAll("#set-density button").forEach(b => {
       b.addEventListener("click", () => {
@@ -1332,17 +1345,6 @@ window.Views = (function () {
           try { localStorage.clear(); } catch (er) { /* ignore */ }
           location.reload();
         }
-      });
-    }
-    // 侧边栏深色模式开关（与设置页分段控件同步）
-    const sbTheme = el("theme-toggle");
-    if (sbTheme) {
-      sbTheme.addEventListener("click", () => {
-        const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-        document.documentElement.dataset.theme = next;
-        sbTheme.classList.toggle("on", next === "dark");
-        try { localStorage.setItem("kimi_theme", next); } catch (er) { /* ignore */ }
-        renderSettings();
       });
     }
     // 设置页打开数据目录

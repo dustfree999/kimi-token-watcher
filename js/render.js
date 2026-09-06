@@ -166,7 +166,7 @@ function renderScopeModelBar(scopeData, scopeTotal, barId, legendId, scopeKey) {
   const emptyLabel = scopeKey === "main" ? "主" : "子";
   const emptyName = scopeKey === "main" ? "主智能体" : "子智能体";
   if (!models.length || !total) {
-    bar.innerHTML = `<span class="sm-seg" style="width:100%;background:${emptyColor};color:rgba(0,0,0,.7);font-size:10px;">${emptyLabel}</span>`;
+    bar.innerHTML = `<span class="sm-seg" style="width:100%;background:${emptyColor};color:var(--on-accent);font-size:10px;">${emptyLabel}</span>`;
     if (total > 0) {
       bar.title = `该范围${emptyName}共 ${fmtFull(total)} tokens，但历史记录未包含模型维度\n（新版聚合后产生的 usage 会写入模型维度）`;
       if (legend) legend.innerHTML = `<span class="sml" style="color:var(--muted)">历史数据未含模型维度</span>`;
@@ -185,13 +185,13 @@ function renderScopeModelBar(scopeData, scopeTotal, barId, legendId, scopeKey) {
   }));
   if (rest.length) {
     const rTot = rest.reduce((a, m) => a + totOf(m), 0);
-    segs.push({ label: "其他", full: null, color: "#8b949e",
+    segs.push({ label: "其他", full: null, color: "var(--muted-strong)",
       pct: (rTot / total) * 100, tokens: rTot });
   }
   // 服务升级前已聚合的历史数据没有 by_model，用灰色段补齐，保证条子填满且百分比真实
   if (total > knownTotal) {
     const unclassified = total - knownTotal;
-    segs.push({ label: "历史未分类", full: "历史未分类数据", color: "#484f58",
+    segs.push({ label: "历史未分类", full: "历史未分类数据", color: "var(--muted-dim)",
       pct: (unclassified / total) * 100, tokens: unclassified });
   }
   bar.innerHTML = segs.map(s =>
@@ -302,7 +302,8 @@ function renderChart(rd) {
   }
 }
 
-const MODEL_COLORS = ["#f0883e", "#58a6ff", "#3fb950", "#a371f7", "#d29922", "#34d399", "#f85149", "#8b949e", "#f0883e", "#58a6ff"];
+/* 模型循环调色板：经 CSS 变量取色，切换主题即时生效（见 base.css --mc-*） */
+const MODEL_COLORS = ["var(--mc-0)", "var(--mc-1)", "var(--mc-2)", "var(--mc-3)", "var(--mc-4)", "var(--mc-5)", "var(--mc-6)", "var(--mc-7)"];
 
 function renderModelDonut(models) {
   // 模型 Token 分布占比（按 totOf 总 tokens，规格书第十节语义区分）
@@ -415,11 +416,11 @@ function renderRows(d, sessionMeta) {
 
 /** 命中率语义色（与 views.js 一致） */
 function hitClsOf(p) { return p >= 90 ? "pct-good" : p >= 70 ? "pct-warn" : "pct-bad"; }
-/** 模型字形徽标 */
+/** 模型字形徽标（经 --mc-N / --mc-N-soft 变量取色，随主题切换） */
 function modelBadgeOf(i) {
   const glyphs = ["★", "●", "■", "▲", "◆", "✚", "●", "◆", "★", "✚"];
-  const c = MODEL_COLORS[i % MODEL_COLORS.length];
-  return '<span class="model-badge" style="background:' + c + '22;color:' + c + '">' + glyphs[i % glyphs.length] + "</span>";
+  const n = i % MODEL_COLORS.length;
+  return '<span class="model-badge" style="background:var(--mc-' + n + '-soft);color:var(--mc-' + n + ')">' + glyphs[i % glyphs.length] + "</span>";
 }
 
 function renderSessionDetail(s) {

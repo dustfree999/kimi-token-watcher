@@ -95,7 +95,8 @@ function costOfAgg(d) {
   }
   return costOf(d);
 }
-const COST_CAT_COLORS = ["#f59e0b", "#3b82f6", "#ec4899", "#8b5cf6"];
+/* 费用四分类调色板：经 CSS 变量取色（见 base.css --cc-*），随主题切换 */
+const COST_CAT_COLORS = ["var(--cc-0)", "var(--cc-1)", "var(--cc-2)", "var(--cc-3)"];
 const COST_CAT_LABELS = ["输入未命中", "缓存命中", "缓存写入", "输出"];
 /** 四分类费用构成 [{label,value,color,key}]：model 给定按单模型计价；否则混合槽位按 by_model 分摊后汇总四类 */
 function costPartsOf(d, model) {

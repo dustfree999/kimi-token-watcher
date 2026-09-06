@@ -19,6 +19,7 @@ Kimi Code CLI 的本地 Token 用量监控面板。Python 后台扫描 `~/.kimi-
 - **多来源统计**：除 Kimi Code 外可同时接入 **ZCode**（`~/.zcode` 的 SQLite 用量库）、**DSH**（`~/.dsh/sessions` 的 zstd JSONL 日志）与 **Copilot(OAI)**（VSCode oai-compatible-copilot 插件日志），顶栏来源切换一键查看单一来源或合并全部；外部源额度与 Kimi 严格分开统计（Kimi 额度看 Kimi Code 视角，外部源只看对应来源）
 - **数据导出**：设置页一键导出按日 / 按模型 CSV（带 BOM，Excel 直接打开不乱码）
 - **告警通知**：当日费用 / 失败次数超阈值时浏览器通知 + 页面提示，同类 30 分钟冷却不重复提醒
+- **多风格界面**：内置 5 套界面风格——暗色（默认）/ 浅色 / 暖白极简 / 战术终端 / 暗夜玻璃，侧栏下拉或设置页一键切换，选择本地记忆（图表 / 徽标配色随风格自动适配）
 
 ## 界面预览
 

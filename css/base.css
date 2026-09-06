@@ -38,6 +38,46 @@
   --radius-badge: 3px;
   --mono: "SF Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
+  /* ---------- 派生语义令牌（默认值 = 暗色主题；各主题可整体覆盖） ---------- */
+  --on-accent: #ffffff;             /* 填充在强调色上的文字 */
+  --accent-border: rgba(240,136,62,.28);
+  --nav-active-bg: rgba(240,136,62,.10);
+  --ico-accent-bg: rgba(240,136,62,.15);
+  --ico-green-bg: rgba(63,185,80,.15);
+  --ico-blue-bg: rgba(88,166,255,.15);
+  --ico-purple-bg: rgba(163,113,247,.15);
+  --ico-yellow-bg: rgba(210,153,34,.15);
+  --ok-soft: rgba(63,185,80,.10);
+  --ok-line: rgba(63,185,80,.35);
+  --err-soft: rgba(248,81,73,.10);
+  --err-soft-2: rgba(248,81,73,.18);
+  --err-line: rgba(248,81,73,.35);
+  --hover-row: rgba(255,255,255,.02);
+  --tip-bg: rgba(13,17,23,.96);
+  --tip-shadow: 0 8px 24px rgba(0,0,0,.5);
+  --modal-shadow: 0 18px 48px rgba(0,0,0,.5);
+  --overlay-bg: rgba(13,17,23,.70);
+  --chart-grid: rgba(255,255,255,.03);
+  --muted-strong: #8b949e;          /* 图表「其他」段 */
+  --muted-dim: #484f58;             /* 图表「历史未分类」段 */
+  --focus-ring: rgba(240,136,62,.50);
+  --brand-glow: rgba(240,136,62,.12);
+  --brand-line: rgba(240,136,62,.60);
+  --brand-mark-bg: linear-gradient(145deg, #ffb454 0%, var(--accent) 45%, #e0532b 100%);
+  --brand-mark-shadow: 0 0 0 1px rgba(240,136,62,.40), 0 4px 12px rgba(240,136,62,.35), inset 0 1px 0 rgba(255,255,255,.35);
+  --font-display: var(--sans);      /* 标题展示字体（极简主题换衬线） */
+  /* 模型循环调色板（JS 经 var() 取用，换主题即时生效） */
+  --mc-0: #f0883e; --mc-0-soft: rgba(240,136,62,.13);
+  --mc-1: #58a6ff; --mc-1-soft: rgba(88,166,255,.13);
+  --mc-2: #3fb950; --mc-2-soft: rgba(63,185,80,.13);
+  --mc-3: #a371f7; --mc-3-soft: rgba(163,113,247,.13);
+  --mc-4: #d29922; --mc-4-soft: rgba(210,153,34,.13);
+  --mc-5: #34d399; --mc-5-soft: rgba(52,211,153,.13);
+  --mc-6: #f85149; --mc-6-soft: rgba(248,81,73,.13);
+  --mc-7: #8b949e; --mc-7-soft: rgba(139,148,158,.13);
+  /* 费用四分类调色板 */
+  --cc-0: #f59e0b; --cc-1: #3b82f6; --cc-2: #ec4899; --cc-3: #8b5cf6;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: var(--bg); }
@@ -56,7 +96,7 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 
 button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
-  outline: 2px solid rgba(240,136,62,.5);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -69,6 +109,285 @@ html[data-theme="light"] {
   --accent: #d96a1f; --accent-soft: rgba(217,106,31,.12);
   --in: #d96a1f; --cache: #1a7f37; --cwrite: #0e7f66; --out: #0969da; --req: #8250df;
   --ok: #1a7f37; --err: #cf222e; --warn: #9a6700;
+  --on-accent: #ffffff;
+  --accent-border: rgba(217,106,31,.30);
+  --nav-active-bg: rgba(217,106,31,.10);
+  --ico-accent-bg: rgba(217,106,31,.12);
+  --ico-green-bg: rgba(26,127,55,.12);
+  --ico-blue-bg: rgba(9,105,218,.12);
+  --ico-purple-bg: rgba(130,80,223,.12);
+  --ico-yellow-bg: rgba(154,103,0,.12);
+  --ok-soft: rgba(26,127,55,.10);
+  --ok-line: rgba(26,127,55,.35);
+  --err-soft: rgba(207,34,46,.08);
+  --err-soft-2: rgba(207,34,46,.15);
+  --err-line: rgba(207,34,46,.35);
+  --hover-row: rgba(0,0,0,.03);
+  --tip-bg: #ffffff;
+  --tip-shadow: 0 8px 24px rgba(0,0,0,.12);
+  --modal-shadow: 0 18px 48px rgba(0,0,0,.18);
+  --overlay-bg: rgba(31,35,40,.45);
+  --chart-grid: rgba(0,0,0,.03);
+  --muted-strong: #8b949e;
+  --muted-dim: #c4cdd5;
+  --focus-ring: rgba(217,106,31,.50);
+  --brand-glow: rgba(217,106,31,.10);
+  --brand-line: rgba(217,106,31,.50);
+  --brand-mark-bg: linear-gradient(145deg, #f0883e 0%, var(--accent) 55%, #b45309 100%);
+  --brand-mark-shadow: 0 0 0 1px rgba(217,106,31,.40), 0 4px 12px rgba(217,106,31,.25), inset 0 1px 0 rgba(255,255,255,.5);
+  --mc-0: #d96a1f; --mc-0-soft: rgba(217,106,31,.12);
+  --mc-1: #0969da; --mc-1-soft: rgba(9,105,218,.12);
+  --mc-2: #1a7f37; --mc-2-soft: rgba(26,127,55,.12);
+  --mc-3: #8250df; --mc-3-soft: rgba(130,80,223,.12);
+  --mc-4: #9a6700; --mc-4-soft: rgba(154,103,0,.12);
+  --mc-5: #0e7f66; --mc-5-soft: rgba(14,127,102,.12);
+  --mc-6: #cf222e; --mc-6-soft: rgba(207,34,46,.12);
+  --mc-7: #8b949e; --mc-7-soft: rgba(139,148,158,.15);
+  --cc-0: #b45309; --cc-1: #1d4ed8; --cc-2: #be185d; --cc-3: #6d28d9;
 }
-html[data-theme="light"] .chart { background-image: repeating-linear-gradient(to top, rgba(0,0,0,.03) 0, rgba(0,0,0,.03) 1px, transparent 1px, transparent 25%); }
-html[data-theme="light"] .tt-row:hover { background: rgba(0,0,0,.04); }
+
+/* ============================================================
+   扩展风格令牌
+   来源：minimalist-ui（暖白极简·编辑风）
+         industrial-brutalist-ui（战术终端·CRT）
+         high-end-visual-design（暗夜玻璃·Ethereal Glass）
+   ============================================================ */
+
+/* ---------- 暖白极简 · 编辑风（bone 纸面 / 超浅边框 / 衬线标题 / 纯平） ---------- */
+html[data-theme="minimal"] {
+  --bg: #FBFBFA; --content: #FBFBFA; --sb: #FBFBFA;
+  --panel: #FFFFFF; --panel-2: #F4F3F0;
+  --line: #EAEAEA; --line-soft: rgba(0,0,0,.06); --bd: #D9D9D6;
+  --text: #2F3437; --text-2: #787774; --muted: #9B9A97;
+  --accent: #B05C34; --accent-soft: #F6EAE3;
+  --in: #B05C34; --cache: #5F8D6A; --cwrite: #3E8E7E; --out: #4A7BA6; --req: #8A6FB8;
+  --ok: #4A7C59; --err: #B3402F; --warn: #956400;
+  --radius: 8px; --radius-btn: 4px; --radius-badge: 2px;
+  --on-accent: #ffffff;
+  --accent-border: rgba(176,92,52,.25);
+  --nav-active-bg: #F6EAE3;
+  --ico-accent-bg: #F6EAE3;
+  --ico-green-bg: #EDF3EC;
+  --ico-blue-bg: #E8F0F7;
+  --ico-purple-bg: #F0ECF8;
+  --ico-yellow-bg: #FBF3DB;
+  --ok-soft: #EDF3EC;
+  --ok-line: rgba(74,124,89,.35);
+  --err-soft: #FBEDEC;
+  --err-soft-2: #F5DDDB;
+  --err-line: rgba(179,64,47,.35);
+  --hover-row: rgba(0,0,0,.025);
+  --tip-bg: #FFFFFF;
+  --tip-shadow: 0 2px 12px rgba(0,0,0,.06);
+  --modal-shadow: 0 12px 40px rgba(0,0,0,.10);
+  --overlay-bg: rgba(47,52,55,.35);
+  --chart-grid: rgba(0,0,0,.035);
+  --muted-strong: #9B9A97;
+  --muted-dim: #D6D4CE;
+  --focus-ring: rgba(176,92,52,.45);
+  --brand-glow: rgba(176,92,52,.07);
+  --brand-line: rgba(176,92,52,.45);
+  --brand-mark-bg: linear-gradient(145deg, #C97B52 0%, #B05C34 55%, #8F4A28 100%);
+  --brand-mark-shadow: 0 0 0 1px rgba(176,92,52,.35), 0 2px 8px rgba(176,92,52,.18), inset 0 1px 0 rgba(255,255,255,.3);
+  --font-display: "Newsreader", "Source Han Serif SC", "Noto Serif SC", "Songti SC", "SimSun", Georgia, serif;
+  --mc-0: #B05C34; --mc-0-soft: #F6EAE3;
+  --mc-1: #4A7BA6; --mc-1-soft: #E8F0F7;
+  --mc-2: #5F8D6A; --mc-2-soft: #EDF3EC;
+  --mc-3: #8A6FB8; --mc-3-soft: #F0ECF8;
+  --mc-4: #A08A3C; --mc-4-soft: #FBF3DB;
+  --mc-5: #3E8E7E; --mc-5-soft: #E7F2F0;
+  --mc-6: #B3402F; --mc-6-soft: #FBEDEC;
+  --mc-7: #9B9A97; --mc-7-soft: #F2F1EE;
+  --cc-0: #A08A3C; --cc-1: #4A7BA6; --cc-2: #C26B96; --cc-3: #8A6FB8;
+}
+/* 编辑风标题：衬线展示字体 + 收紧字距 */
+html[data-theme="minimal"] .sb-title,
+html[data-theme="minimal"] .tb-title h1,
+html[data-theme="minimal"] .panel-head h2,
+html[data-theme="minimal"] .guide-page h2,
+html[data-theme="minimal"] .modal h2 {
+  font-family: var(--font-display);
+  letter-spacing: -.01em;
+}
+
+/* ---------- 战术终端 · CRT（等宽主导 / 零圆角 / 警示红 / 扫描线） ---------- */
+html[data-theme="terminal"] {
+  --bg: #0A0A0A; --content: #0A0A0A; --sb: #0A0A0A;
+  --panel: #121212; --panel-2: #1A1A1A;
+  --line: #2A2A2A; --line-soft: rgba(255,255,255,.08); --bd: #3A3A3A;
+  --text: #EAEAEA; --text-2: #9A9A9A; --muted: #6E6E6E;
+  --accent: #E61919; --accent-soft: rgba(230,25,25,.12);
+  --in: #CE7A3D; --cache: #4E9A62; --cwrite: #3E9E8A; --out: #5D8FC9; --req: #9A6FB8;
+  --ok: #4E9A62; --err: #E61919; --warn: #C29F3C;
+  --radius: 0px; --radius-btn: 0px; --radius-badge: 0px;
+  --sans: "Cascadia Mono", "JetBrains Mono", "SF Mono", Consolas, "Courier New", monospace;
+  --on-accent: #ffffff;
+  --accent-border: rgba(230,25,25,.40);
+  --nav-active-bg: rgba(230,25,25,.10);
+  --ico-accent-bg: rgba(230,25,25,.14);
+  --ico-green-bg: rgba(78,154,98,.14);
+  --ico-blue-bg: rgba(93,143,201,.14);
+  --ico-purple-bg: rgba(154,111,184,.14);
+  --ico-yellow-bg: rgba(194,159,60,.14);
+  --ok-soft: rgba(78,154,98,.10);
+  --ok-line: rgba(78,154,98,.35);
+  --err-soft: rgba(230,25,25,.10);
+  --err-soft-2: rgba(230,25,25,.18);
+  --err-line: rgba(230,25,25,.40);
+  --hover-row: rgba(255,255,255,.03);
+  --tip-bg: #121212;
+  --tip-shadow: 0 0 0 1px #2A2A2A;
+  --modal-shadow: 0 0 0 1px #2A2A2A, 0 24px 64px rgba(0,0,0,.7);
+  --overlay-bg: rgba(0,0,0,.78);
+  --chart-grid: rgba(255,255,255,.05);
+  --muted-strong: #8A8A8A;
+  --muted-dim: #3A3A3A;
+  --focus-ring: rgba(230,25,25,.55);
+  --brand-glow: rgba(230,25,25,.10);
+  --brand-line: rgba(230,25,25,.50);
+  --brand-mark-bg: linear-gradient(145deg, #FF3B3B 0%, #E61919 55%, #B01212 100%);
+  --brand-mark-shadow: 0 0 0 1px rgba(230,25,25,.45), 0 0 12px rgba(230,25,25,.25), inset 0 1px 0 rgba(255,255,255,.2);
+  --mc-0: #E61919; --mc-0-soft: rgba(230,25,25,.14);
+  --mc-1: #CE7A3D; --mc-1-soft: rgba(206,122,61,.14);
+  --mc-2: #4E9A62; --mc-2-soft: rgba(78,154,98,.14);
+  --mc-3: #9A6FB8; --mc-3-soft: rgba(154,111,184,.14);
+  --mc-4: #C29F3C; --mc-4-soft: rgba(194,159,60,.14);
+  --mc-5: #3E9E8A; --mc-5-soft: rgba(62,158,138,.14);
+  --mc-6: #5D8FC9; --mc-6-soft: rgba(93,143,201,.14);
+  --mc-7: #8A8A8A; --mc-7-soft: rgba(138,138,138,.14);
+  --cc-0: #C8873C; --cc-1: #5D8FC9; --cc-2: #B85C82; --cc-3: #9A6FB8;
+}
+/* 零圆角扫描：所有结构件一律 90°（圆环仪表除外） */
+html[data-theme="terminal"] .sb-brand,
+html[data-theme="terminal"] .sb-brand .mark,
+html[data-theme="terminal"] .sb-brand .sb-sub,
+html[data-theme="terminal"] .nav-item,
+html[data-theme="terminal"] .panel,
+html[data-theme="terminal"] .metric,
+html[data-theme="terminal"] .m-ico,
+html[data-theme="terminal"] .scope-col,
+html[data-theme="terminal"] .scope-head-bar,
+html[data-theme="terminal"] .scope-chip,
+html[data-theme="terminal"] .btn,
+html[data-theme="terminal"] .link-btn,
+html[data-theme="terminal"] .btn-ghost,
+html[data-theme="terminal"] .range-switch,
+html[data-theme="terminal"] .range-switch button,
+html[data-theme="terminal"] .history-filter,
+html[data-theme="terminal"] .history-filter button,
+html[data-theme="terminal"] .ev-filter-scope,
+html[data-theme="terminal"] .ev-filter-scope button,
+html[data-theme="terminal"] .seg,
+html[data-theme="terminal"] .seg button,
+html[data-theme="terminal"] .chart-filter,
+html[data-theme="terminal"] .chart-filter button,
+html[data-theme="terminal"] .settings-tabs,
+html[data-theme="terminal"] .settings-tab,
+html[data-theme="terminal"] .pager button,
+html[data-theme="terminal"] .toast,
+html[data-theme="terminal"] .modal,
+html[data-theme="terminal"] .tt-detail,
+html[data-theme="terminal"] .pm-table-wrap,
+html[data-theme="terminal"] .catalog-card,
+html[data-theme="terminal"] .system-card,
+html[data-theme="terminal"] .ev-filter select,
+html[data-theme="terminal"] .evd-copy,
+html[data-theme="terminal"] .ev-scope,
+html[data-theme="terminal"] .live-badge,
+html[data-theme="terminal"] .model-badge,
+html[data-theme="terminal"] .guide-page,
+html[data-theme="terminal"] .style-picker select,
+html[data-theme="terminal"] .pm-search,
+html[data-theme="terminal"] .col {
+  border-radius: 0;
+}
+/* 数据标签大写化 + 字距（拉丁字符生效，中文不受影响） */
+html[data-theme="terminal"] .panel-head h2,
+html[data-theme="terminal"] .m-label,
+html[data-theme="terminal"] .sb-title,
+html[data-theme="terminal"] .tb-title h1,
+html[data-theme="terminal"] .pt-sub,
+html[data-theme="terminal"] .sd-label,
+html[data-theme="terminal"] .sc-label,
+html[data-theme="terminal"] .cc-label {
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+/* CRT 扫描线覆盖层（纯装饰，不拦截交互） */
+html[data-theme="terminal"] body::after {
+  content: "";
+  position: fixed; inset: 0; z-index: 2;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg,
+    rgba(255,255,255,.025) 0, rgba(255,255,255,.025) 1px,
+    transparent 1px, transparent 3px);
+}
+
+/* ---------- 暗夜玻璃 · Ethereal Glass（OLED 黑 + 紫/翠光斑 / 半透明面板 / 发丝边） ---------- */
+html[data-theme="glass"] {
+  --bg: #050505; --content: transparent; --sb: rgba(10,10,14,.66);
+  --panel: rgba(255,255,255,.045); --panel-2: rgba(255,255,255,.09);
+  --line: rgba(255,255,255,.09); --line-soft: rgba(255,255,255,.07); --bd: rgba(255,255,255,.16);
+  --text: #F2F2F5; --text-2: #A8A8B3; --muted: #71717D;
+  --accent: #9D8CFF; --accent-soft: rgba(157,140,255,.14);
+  --in: #FB9268; --cache: #3ED598; --cwrite: #2DD4BF; --out: #6AA6FF; --req: #E879F9;
+  --ok: #3ED598; --err: #FF6B6B; --warn: #F5B84D;
+  --radius: 16px; --radius-btn: 10px; --radius-badge: 4px;
+  --on-accent: #14121F;
+  --accent-border: rgba(157,140,255,.35);
+  --nav-active-bg: rgba(157,140,255,.12);
+  --ico-accent-bg: rgba(157,140,255,.14);
+  --ico-green-bg: rgba(62,213,152,.14);
+  --ico-blue-bg: rgba(106,166,255,.14);
+  --ico-purple-bg: rgba(232,121,249,.14);
+  --ico-yellow-bg: rgba(245,184,77,.14);
+  --ok-soft: rgba(62,213,152,.10);
+  --ok-line: rgba(62,213,152,.35);
+  --err-soft: rgba(255,107,107,.10);
+  --err-soft-2: rgba(255,107,107,.18);
+  --err-line: rgba(255,107,107,.40);
+  --hover-row: rgba(255,255,255,.04);
+  --tip-bg: rgba(20,20,26,.94);
+  --tip-shadow: 0 12px 32px rgba(0,0,0,.55);
+  --modal-shadow: 0 24px 64px rgba(0,0,0,.60);
+  --overlay-bg: rgba(5,5,8,.66);
+  --chart-grid: rgba(255,255,255,.04);
+  --muted-strong: #8B8B96;
+  --muted-dim: #2E2E38;
+  --focus-ring: rgba(157,140,255,.55);
+  --brand-glow: rgba(157,140,255,.14);
+  --brand-line: rgba(157,140,255,.50);
+  --brand-mark-bg: linear-gradient(145deg, #B8ABFF 0%, #9D8CFF 55%, #7A66E8 100%);
+  --brand-mark-shadow: 0 0 0 1px rgba(157,140,255,.45), 0 4px 16px rgba(157,140,255,.30), inset 0 1px 0 rgba(255,255,255,.3);
+  --mc-0: #9D8CFF; --mc-0-soft: rgba(157,140,255,.14);
+  --mc-1: #6AA6FF; --mc-1-soft: rgba(106,166,255,.14);
+  --mc-2: #3ED598; --mc-2-soft: rgba(62,213,152,.14);
+  --mc-3: #E879F9; --mc-3-soft: rgba(232,121,249,.14);
+  --mc-4: #F5B84D; --mc-4-soft: rgba(245,184,77,.14);
+  --mc-5: #2DD4BF; --mc-5-soft: rgba(45,212,191,.14);
+  --mc-6: #FF6B6B; --mc-6-soft: rgba(255,107,107,.14);
+  --mc-7: #8B8B96; --mc-7-soft: rgba(139,139,150,.14);
+  --cc-0: #F5B84D; --cc-1: #6AA6FF; --cc-2: #F472B6; --cc-3: #A78BFA;
+}
+/* 光斑层：固定背景 mesh 渐变，内容浮于其上 */
+html[data-theme="glass"] body::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(720px 480px at 12% 8%, rgba(157,140,255,.16), transparent 65%),
+    radial-gradient(640px 420px at 88% 18%, rgba(62,213,152,.10), transparent 65%),
+    radial-gradient(900px 520px at 50% 105%, rgba(106,166,255,.12), transparent 65%);
+}
+html[data-theme="glass"] .app { position: relative; z-index: 1; }
+/* 模糊只用于固定/粘性元素（性能护栏），面板仅半透明 + 发丝内高光 */
+html[data-theme="glass"] .sidebar {
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+html[data-theme="glass"] .topbar { background: rgba(5,5,8,.72); }
+html[data-theme="glass"] .overlay { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+html[data-theme="glass"] .panel,
+html[data-theme="glass"] .metric {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+}

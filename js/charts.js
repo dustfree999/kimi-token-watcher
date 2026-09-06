@@ -187,7 +187,7 @@ window.Charts = (function () {
     if (!tip) {
       tip = document.createElement("div");
       tip.className = "tip donut-tip";
-      tip.style.cssText = "display:none;position:fixed;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:11px;white-space:nowrap;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.3);pointer-events:none;";
+      tip.style.cssText = "display:none;position:fixed;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:11px;white-space:nowrap;z-index:100;box-shadow:var(--tip-shadow);pointer-events:none;";
       document.body.appendChild(tip);
       donutEl._donutTip = tip;
     }
