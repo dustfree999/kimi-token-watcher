@@ -20,7 +20,7 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 |---|---|---|
 | `meta` | 杂项配置与运行状态（键值对，值为 JSON） | 固定几行 |
 | `days` | 每日聚合统计（嵌套 JSON） | ≤ 90 天（自动裁剪） |
-| `recent` | 实时事件流 | ≤ 500 条（自动裁剪） |
+| `recent` | 实时事件流 | ≤ 10000 条（自动裁剪） |
 | `seen_usage` | usage 记录去重指纹（含来源） | ≤ 20k（30 天保留） |
 | `seen_req` | request 记录去重指纹（含来源） | ≤ 20k（30 天保留） |
 | `seen_turn` | turn.ended 失败回合去重指纹（含来源） | ≤ 20k（30 天保留） |
@@ -36,16 +36,23 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 
 | 列 | 说明 |
 |---|---|
-| `key` | 键名，取值：`tracked_files`、`session_meta`、`last_text`、`last_model`、`fails`、`recent_seq`、`last_scan_time`、`scan_errors` |
+| `key` | 键名，取值：`tracked_files`、`session_meta`、`last_text`、`last_model`、`fails`、`recent_seq`、`last_scan_time`、`scan_errors`、`ext_state`、`turn_backfill_done`、`recent_backfill_done`、`ext_text_backfill_done` |
 | `value` | JSON 字符串值 |
 
 - `tracked_files`：各 wire.jsonl 已读字节偏移（增量扫描断点）
 - `session_meta`：会话元数据（标题、cwd、是否自定义等）
 - `last_text`：各 wire 最近输入/输出文本
 - `last_model`：各 wire 最近一次 `llm.request` 的模型名（`turn.ended` 失败回合归属用）
-- `fails`：失败回合明细缓冲（最多 300 条，含 time/date/model/session/scope/err_code/err_msg），供模型详情等页面回溯历史失败
+- `fails`：失败回合明细缓冲（最多 1000 条，含 time/date/hour/model/session/scope/err_code/err_msg），供模型详情等页面回溯历史失败
 - `recent_seq`：实时事件流下一个可用 eventId
 - `scan_errors`：最近采集告警（最多 10 条）
+- `ext_state`：外部源水位（`zcode_last_rowid`、`dsh_files`）
+- `turn_backfill_done` / `recent_backfill_done` / `ext_text_backfill_done`：一次性回补 / 回填完成标记（见下）
+
+> **事件流历史回补**：`recent` 是滚动缓冲，旧事件会被新事件挤出，增量扫描不会重读历史。
+> 升级后首次启动会在后台线程一次性重读最近 30 天的 wire.jsonl（外加 ZCode 全表 / DSH 全量文件），
+> 把历史事件只补进 `recent` / `fails` 展示缓冲——不走 `apply_record` / `apply_turn_end`，
+> 聚合统计与去重指纹完全不受影响；与现有事件按内容键去重，幂等。完成后置位 `recent_backfill_done`，后续启动跳过。
 
 ### 3.2 `days` — 每日聚合统计
 
@@ -71,13 +78,21 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
                               "by_model": {...}, "hourly": {"9": {...}} } },
   "by_scope": { "main": { "scope": "main", "by_model": {...} },
                 "subagent": { "scope": "subagent", "by_model": {...} } },
-  "hourly": { "9": { "input": ..., "cached": ..., "output": ..., "calls": ..., "requests": ... } }
+  "hourly": { "9": { "input": ..., "cached": ..., "output": ..., "calls": ..., "requests": ...,
+                     "cacheWrite": ... } },
+  "by_source": { "zcode": { "source": "zcode", "inputOther": ..., "inputCacheRead": ...,
+                            "inputCacheCreation": ..., "output": ..., "calls": ...,
+                            "requests": 0, "failed": ...,
+                            "by_model": {...},
+                            "hourly": { "9": { "input": ..., "cached": ..., "output": ...,
+                                               "calls": ..., "cacheWrite": ... } } } }
 }
 ```
 
 - 各小时槽的键是**字符串**（`"9"`、`"23"`），不是数字
 - `has_main` / `has_sub`：会话是否包含主/子智能体记录（旧数据可能缺失，前端兼容显示「主」）
 - `failed` 计数器加在 6 个层级：日顶层、`by_model[m]`、`by_session[s]`、`by_session[s].by_model[m]`、`by_scope[sc]`、`by_scope[sc].by_model[m]`；**hourly 不加**。旧存档可能缺失该键，前端与代码需按缺省 0 处理
+- `by_source`：外部数据源（ZCode / DSH）的独立槽位，**顶层计数严格等于 Kimi Code 自身**，外部源只写此槽（含 `failed`/`by_model`/`hourly`）；无外部源的日期该键缺失。前端「全部」视图 = 顶层 + Σ外部源槽，「Kimi Code」视图 = 顶层原样
 
 ### 3.3 `recent` — 实时事件流
 
@@ -85,7 +100,7 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 |---|---|
 | `eventId` | 递增事件 id（主键，重启后续接） |
 | `time` | 毫秒时间戳 |
-| `date` / `hour` | 所属日期 / 小时（字符串） |
+| `date` / `hour` | 所属日期（字符串）/ 小时（INTEGER） |
 | `model` | 模型名 |
 | `session` | 会话 id |
 | `scope` | `main` = 主智能体，`subagent` = 子智能体 |
@@ -93,8 +108,9 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 | `input_text` / `output_text` | 最近输入/输出文本（事件行展开查看用） |
 | `kind` | 事件类型：`usage`（用量）/ `failed`（失败回合），缺省 `usage` |
 | `err_code` / `err_msg` | 失败事件的错误码 / 错误信息（截断 300 字符），非失败事件为空串 |
+| `source` | 事件来源：`kimi`（缺省）/ `zcode` / `dsh`，前端来源筛选据此过滤 |
 
-> 早期版本建的库没有 `kind`/`err_code`/`err_msg` 三列，服务启动时自动 `ALTER TABLE` 补齐（默认 `kind='usage'`、错误列为空串），无需手动处理。
+> 早期版本建的库没有 `kind`/`err_code`/`err_msg`/`source` 四列，服务启动时自动 `ALTER TABLE` 补齐（默认 `kind='usage'`、错误列为空串、`source='kimi'`），无需手动处理。
 
 ### 3.4 去重指纹表（`seen_usage` / `seen_req` / `seen_turn` / `seen_usage_g` / `seen_req_g` / `seen_turn_g`）
 
@@ -102,10 +118,10 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 
 | 表 | 指纹组成 | 用途 |
 |---|---|---|
-| `seen_usage` | `(ts, src, model, i, o, c, cc)` | usage 主指纹（含来源路径，区分不同会话/Agent） |
-| `seen_req` | `(ts, src, model, turnStep)` | request 主指纹（`turnStep` 为字符串） |
-| `seen_turn` | `(ts, src, turnId)` | turn.ended 失败回合主指纹（`turnId` 为回合 id） |
-| `seen_usage_g` | `(ts, model, i, o, c, cc)` | usage 全局兜底（不含来源，仅用于 >10 分钟的历史回放） |
+| `seen_usage` | `(ts, src, model, i, o, c, cc)` | usage 主指纹（含来源路径，区分不同会话/Agent）；**外部源指纹首元素为字符串 `"ext"`**（无时间戳，以 zcode rowid / dsh 消息 id 为身份，整表/整文件重扫幂等） |
+| `seen_req` | `(ts, src, model, turnStep)` | request 主指纹（`turnStep` 为字符串；外部源不产生 request） |
+| `seen_turn` | `(ts, src, turnId)` | turn.ended 失败回合主指纹（`turnId` 为回合 id）；外部源为字符串形态 `("ext", source, "source:turnId")`（如 `("ext", "zcode", "zcode:turn-abc")`，该字符串整体直接落在 turnId 列） |
+| `seen_usage_g` | `(ts, model, i, o, c, cc)` | usage 全局兜底（不含来源，仅用于 >10 分钟的历史回放；仅 kimi 记录进入） |
 | `seen_req_g` | `(ts, model)` | request 全局兜底 |
 | `seen_turn_g` | `(ts, turnId)` | turn.ended 失败回合全局兜底 |
 
@@ -119,6 +135,12 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
         │  去重指纹校验（SEEN 六表）→ 通过则计数
         ▼
   内存 STATE（days / recent / last_model / ...）
+        ▲
+        │  collector_zcode：~/.zcode 的 model_usage 表按 rowid 增量
+        │    （表重建导致 rowid 回落后自动重置水位全量回放，指纹幂等不重复计数）
+        │  collector_dsh：~/.dsh/sessions 的 *.jsonl.zstd 按 mtime/size 重扫
+        │    （文件首次出现视为历史回放，不推实时事件流）
+        │  （外部源只写 days[date].by_source.<source> + recent，顶层不变）
         │  save_state：每 30 秒 / Ctrl+C 时，单事务全量同步
         ▼
   data.db（WAL 模式，事务原子）
@@ -133,9 +155,9 @@ Kimi Code Token 监控的持久化存储。本文档说明数据库结构、数�
 | 数据 | 保留策略 |
 |---|---|
 | `days` | 最多 90 天，超出自动裁剪 |
-| `recent` | 最多 500 条，超出丢弃最旧 |
-| `fails`（meta 键） | 最多 300 条，超出丢弃最旧 |
-| `seen_*` | 指纹保留 30 天；任一集合超 2 万条即触发裁剪 |
+| `recent` | 最多 10000 条，超出丢弃最旧 |
+| `fails`（meta 键） | 最多 1000 条，超出丢弃最旧 |
+| `seen_*` | kimi 指纹保留 30 天；外部源指纹按来源分桶各保留最近 5000 条；任一集合超 2 万条即触发裁剪 |
 | `scan_errors` | 最多 10 条 |
 
 ## 6. 常用查询示例（命令行）
@@ -188,4 +210,5 @@ for date, data in c.execute('SELECT date, data FROM days ORDER BY date DESC LIMI
 - `state.py`：数据库连接、建表、加载/保存、一次性迁移
 - `aggregate.py`：记录聚合（写内存 STATE，间接落库）
 - `collector.py`：扫描循环与启动恢复
+- `collector_zcode.py` / `collector_dsh.py`：外部源采集（只写 `by_source` 槽）
 - `server.py`：HTTP 服务与响应组装

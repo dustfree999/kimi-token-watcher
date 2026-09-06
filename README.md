@@ -16,6 +16,7 @@ Kimi Code CLI 的本地 Token 用量监控面板。Python 后台扫描 `~/.kimi-
 - **内置价格目录**：内置 models.dev 价格目录（元计价），可在设置页手动同步在线更新，用户手动定价始终优先
 - **历史统计**：按天聚合（自动保留 90 天），长期趋势与明细表；概览页趋势图支持按小时 / 按天切换
 - **时间筛选**：今日 / 7 天 / 30 天 / 自定义时间范围（起止日期含首尾，最多 366 天），全部页面同步生效
+- **多来源统计**：除 Kimi Code 外可同时接入 **ZCode**（`~/.zcode` 的 SQLite 用量库）与 **DSH**（`~/.dsh/sessions` 的 zstd JSONL 日志），顶栏来源切换一键查看单一来源或合并全部；外部源额度与 Kimi 严格分开统计（Kimi 额度看 Kimi Code 视角，外部源只看对应来源）
 - **数据导出**：设置页一键导出按日 / 按模型 CSV（带 BOM，Excel 直接打开不乱码）
 - **告警通知**：当日费用 / 失败次数超阈值时浏览器通知 + 页面提示，同类 30 分钟冷却不重复提醒
 
@@ -44,7 +45,7 @@ Kimi Code CLI 的本地 Token 用量监控面板。Python 后台扫描 `~/.kimi-
 
 3. 浏览器访问 **http://127.0.0.1:8787**
 
-**依赖**：仅需 **Python 3.10+** 标准库（`http.server` / `sqlite3` / `threading` 等），无需安装任何第三方包。
+**依赖**：仅需 **Python 3.10+** 标准库（`http.server` / `sqlite3` / `threading` 等），无需安装任何第三方包。**可选**：统计 DSH 用量需要 `zstandard` 包（`pip install zstandard`）；未安装时 DSH 采集自动跳过，Kimi / ZCode 不受影响。
 
 **演示模式**：没有 Kimi Code 数据也能先体验——生成合成演示数据并指向它启动：
 
@@ -56,7 +57,8 @@ python server.py --dir demo_sessions
 ## 页面使用指南
 
 - **概览**：今日 / 所选时间范围的 KPI 总览（调用数、Token、费用、失败数）、Token 资源分配、使用趋势、模型分布与会话 TOP3。
-- **实时事件**：每 2 秒自动刷新的事件流；点击事件行展开查看输入/输出文本；支持按主/子智能体、模型筛选与分页；顶部时间筛选同步生效。
+- **来源筛选**：顶栏左侧来源切换（全部 / Kimi Code / ZCode / DSH …），外部源有数据才出现。选中「Kimi Code」即 Kimi 自身额度（外部源不计入）；选中外部源只看该源；「全部」为合并视图（Kimi + 各外部源叠加），实时事件流同步按来源过滤。
+- **实时事件**：每 2 秒自动刷新的事件流（服务端分页）；点击事件行展开查看输入/输出文本（Kimi Code / ZCode / DSH 均支持）；支持按主/子智能体、模型筛选与分页（10/20/50 条每页、跳至指定页）；顶部时间筛选同步生效。
 - **模型分析**：按模型聚合的调用数、Token、费用与失败率；点击模型行进入详情，可回溯该模型的历史失败记录（错误码 + 错误信息）。
 - **会话分析**：按会话维度聚合，展示各会话的 Token 与费用消耗，点击可看会话内明细。
 - **历史统计**：按天聚合的长期趋势（自动保留 90 天），含每日明细表。
@@ -71,8 +73,10 @@ python server.py --dir demo_sessions
 |---|---|
 | `server.py` | 入口 + HTTP 服务（路由分发、`/api/usage` 响应组装、端口冲突检测） |
 | `state.py` | 共享状态（`STATE` / `LOCK` / 去重集合 `SEEN_*`）与 SQLite 持久化 |
-| `aggregate.py` | 聚合槽位与记录累加（`apply_record` / `apply_request` / `apply_turn_end`） |
+| `aggregate.py` | 聚合槽位与记录累加（`apply_record` / `apply_request` / `apply_turn_end`，含外部源 `by_source` 分流） |
 | `collector.py` | 增量扫描解析与采集循环（2 秒轮询、启动回放、历史失败回补） |
+| `collector_zcode.py` | ZCode 外部源采集（SQLite `model_usage` 增量水位，rowid 去重） |
+| `collector_dsh.py` | DSH 外部源采集（zstd JSONL，按文件 mtime/size 变化流式重解，消息 id 去重） |
 
 前端为原生 JS 单页应用（无框架）：`index.html` + `js/`（`utils.js`、`data.js`、`render.js`、`main.js`、`charts.js`、`views.js`）+ `css/`（`base.css`、`layout.css`、`components.css`）。
 
@@ -84,6 +88,8 @@ python server.py --dir demo_sessions
 - 每 **30 秒**自动同步一次，`Ctrl+C` 退出时也会保存
 - 首次启动若存在旧版 `data.json` 会自动一次性迁移（原文件改名为 `data.json.migrated-YYYYMMDD.bak`）
 - 旧库升级到新版后，首次启动会**全量回补历史失败回合**（`turn.ended failed`），完成后置位跳过
+- 首次启动还会在后台线程**一次性回补事件流历史**：重读最近 30 天的 wire.jsonl 与 ZCode / DSH 历史，只补进事件流展示缓冲（最多 10000 条），不动聚合统计与去重指纹，完成后置位跳过
+- 外部源（ZCode / DSH）记录只写入 `days[date].by_source.<source>` 槽，**不进入顶层总量**（顶层严格等于 Kimi Code 自身额度），失败回合记入槽内 `failed`；去重指纹不携带时间戳（以 zcode rowid / dsh 消息 id 为身份），水位失效触发整文件/全表重扫时天然幂等
 - 表结构、数据流、生命周期与查询示例详见 **[docs/DATABASE.md](docs/DATABASE.md)**
 
 ## 命令行参数与 API
@@ -94,13 +100,18 @@ python server.py --dir demo_sessions
 |---|---|---|
 | `--port` | 监听端口 | `8787` |
 | `--dir` | sessions 根目录 | `~/.kimi-code/sessions` |
+| `--zcode-db` | ZCode 用量 SQLite 路径 | `~/.zcode/cli/db/db.sqlite` |
+| `--dsh-dir` | DSH sessions 根目录 | `~/.dsh/sessions` |
+
+> 外部源自动探测默认路径，无需配置即可用；手动指定适用于路径不同的安装。
 
 **HTTP 端点：**
 
 | 端点 | 说明 |
 |---|---|
 | `GET /` | 返回仪表盘页面 `index.html` |
-| `GET /api/usage` | 聚合 JSON（days / week / month / recent / fails / rates / prices 等） |
+| `GET /api/usage` | 聚合 JSON（days / week / month / recent(最新200条) / fails / rates / prices 等） |
+| `GET /api/events` | 事件流服务端分页：`?from&to&source&scope(all/main/sub/failed)&model&page&size`，返回 `{total, page, size, items, models}` |
 | `GET /api/open` | 用系统资源管理器打开数据源目录 |
 | `GET /js/*`、`GET /css/*` | 静态资源 |
 
@@ -137,6 +148,8 @@ kimi-token-watcher/
 ├── state.py             # 共享状态与 SQLite 持久化
 ├── aggregate.py         # 聚合槽位与记录累加
 ├── collector.py         # 增量扫描与采集循环
+├── collector_zcode.py   # ZCode 外部源采集（SQLite）
+├── collector_dsh.py     # DSH 外部源采集（zstd JSONL）
 ├── index.html           # 仪表盘页面
 ├── js/                  # 前端逻辑（6 个模块）
 ├── css/                 # 前端样式（3 个文件）
