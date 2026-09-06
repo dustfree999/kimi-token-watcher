@@ -48,9 +48,23 @@ def _slot(days, date):
             "output": 0, "calls": 0, "requests": 0, "failed": 0,
             "by_model": {}, "by_session": {}, "hourly": {},
             "by_scope": {},  # { "main": {...}, "subagent": {...} }
+            "by_source": {},  # 外部源（zcode/dsh）独立槽，不进顶层总量
         }
         days[date] = s
     return s
+
+
+def _source_slot(s, source):
+    """外部数据源（zcode/dsh）的日槽位：只存 by_source，不进顶层总量。"""
+    if "by_source" not in s:
+        s["by_source"] = {}  # 兼容旧存档
+    x = s["by_source"].get(source)
+    if x is None:
+        x = {"source": source, "inputOther": 0, "inputCacheRead": 0,
+             "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0,
+             "failed": 0, "by_model": {}, "hourly": {}}
+        s["by_source"][source] = x
+    return x
 
 
 def _scope_slot(s, scope):
@@ -81,9 +95,11 @@ def _scope_model_slot(x, model):
 def _model_slot(s, model):
     m = s["by_model"].get(model)
     if m is None:
+        # 不预建 "hourly" 死字段：kimi 路径的模型槽由 _model_hour_slot 按需
+        # 创建并填充；外部源（zcode/dsh）的 by_source 模型槽从不累计小时数据。
         m = {"model": model, "inputOther": 0, "inputCacheRead": 0,
              "inputCacheCreation": 0, "output": 0, "calls": 0, "requests": 0,
-             "failed": 0, "hourly": {}}
+             "failed": 0}
         s["by_model"][model] = m
     elif "hourly" not in m:
         # 兼容旧存档：已存在但无 hourly 的模型槽位补齐
@@ -136,7 +152,10 @@ def _hour_slot(s, h):
     key = str(h)  # 统一 str 键，避免 int/str 混存导致 JSON 序列化丢数据
     hh = s["hourly"].get(key)
     if hh is None:
-        hh = {"input": 0, "cached": 0, "output": 0, "calls": 0, "requests": 0}
+        # 注意：旧存档的 hourly 条目可能没有 cacheWrite 键，
+        # 累加处一律 .get("cacheWrite", 0) 兜底（见 apply_record）。
+        hh = {"input": 0, "cached": 0, "output": 0, "calls": 0, "requests": 0,
+              "cacheWrite": 0}
         s["hourly"][key] = hh
     return hh
 
@@ -153,6 +172,8 @@ def apply_record(rec):
         if rec.get("usageScope") == "session":
             return
 
+        source = rec.get("source") or "kimi"
+
         us = rec.get("usage") or {}
         other = _num(us, "inputOther")
         cached = _num(us, "inputCacheRead")
@@ -166,28 +187,80 @@ def apply_record(rec):
         # 复制段内记录的 time 早于 fork 创建时刻，直接跳过避免重复计数。
         # （延迟导入：is_fork_copy 定义于 collector 模块，避免模块循环依赖）
         from collector import is_fork_copy
-        if is_fork_copy(session, ts):
+        if source == "kimi" and is_fork_copy(session, ts):
             return
 
         # 指纹去重（三层防线，见 state 模块文件头注释）。
         # 主指纹含来源 src：不同会话/Agent 的同毫秒同模型同 token 数记录不再误去重。
-        fp = (ts, rec.get("src") or "", rec.get("model"), other, out, cached, creation)
-        fp_g = (ts, rec.get("model"), other, out, cached, creation)
-        # 老记录回放（距当前处理时刻超 10 分钟）：只查全局兜底集合丢弃；
-        # 活并发记录被扫描时永远不超 10 分钟，走主指纹不会误杀。
-        if time.time() * 1000 - ts > SEEN_OLD_THRESHOLD_MS:
-            if fp_g in SEEN_USAGE_G:
-                return
-        else:
+        # 外部源（zcode/dsh）的记录天然是历史回放（表/文件水位重扫），唯一身份
+        # 由 src 承担（zcode 用 rowid、dsh 用 msg_id），指纹去掉 ts —— 否则
+        # 水位变化触发整文件重扫时，同一条消息因重扫时刻不同而重复计数。
+        if source != "kimi":
+            fp = ("ext", rec.get("src") or f"{source}:{rec.get('model')}",
+                  rec.get("model"), other, out, cached, creation)
             if fp in SEEN_USAGE:
                 return
             SEEN_USAGE.add(fp)
-        SEEN_USAGE_G.add(fp_g)  # 通过（被计数）的记录同时加入全局兜底集合
+        else:
+            fp = (ts, rec.get("src") or "", rec.get("model"), other, out, cached, creation)
+            fp_g = (ts, rec.get("model"), other, out, cached, creation)
+            # 老记录回放（距当前处理时刻超 10 分钟）：只查全局兜底集合丢弃；
+            # 活并发记录被扫描时永远不超 10 分钟，走主指纹不会误杀。
+            if time.time() * 1000 - ts > SEEN_OLD_THRESHOLD_MS:
+                if fp_g in SEEN_USAGE_G:
+                    return
+            else:
+                if fp in SEEN_USAGE:
+                    return
+                SEEN_USAGE.add(fp)
+            SEEN_USAGE_G.add(fp_g)  # 通过（被计数）的记录同时加入全局兜底集合
 
         date = day_of(ts)
         s = _slot(STATE["days"], date)
         model = rec.get("model") or "(unknown)"
         scope = rec.get("scope") or "main"
+
+        # 外部数据源（zcode/dsh）：只写 by_source 槽，不进顶层总量/scope/session
+        if source != "kimi":
+            ss = _source_slot(s, source)
+            ss["inputOther"] = ss.get("inputOther", 0) + other
+            ss["inputCacheRead"] = ss.get("inputCacheRead", 0) + cached
+            ss["inputCacheCreation"] = ss.get("inputCacheCreation", 0) + creation
+            ss["output"] = ss.get("output", 0) + out
+            ss["calls"] = ss.get("calls", 0) + 1
+
+            m = _model_slot(ss, model)
+            m["inputOther"] = m.get("inputOther", 0) + other
+            m["inputCacheRead"] = m.get("inputCacheRead", 0) + cached
+            m["inputCacheCreation"] = m.get("inputCacheCreation", 0) + creation
+            m["output"] = m.get("output", 0) + out
+            m["calls"] = m.get("calls", 0) + 1
+
+            h = hour_of(ts)
+            hh = _hour_slot(ss, h)
+            hh["input"] = hh.get("input", 0) + other
+            hh["cached"] = hh.get("cached", 0) + cached
+            hh["output"] = hh.get("output", 0) + out
+            hh["calls"] = hh.get("calls", 0) + 1
+            hh["cacheWrite"] = hh.get("cacheWrite", 0) + creation
+
+            state_recent = STATE["recent"]
+            if not rec.get("replay"):  # 历史回放不推实时事件流（避免首次全扫淹没 kimi 实时事件）
+                state_recent.append({
+                    "time": int(ts), "date": date, "hour": h,
+                    "model": model, "session": session, "scope": scope,
+                    "input": int(other), "cached": int(cached), "output": int(out),
+                    "total": int(other + cached + out),
+                    "eventId": STATE["recent_seq"],
+                    "kind": "usage",
+                    "source": source,
+                    "input_text": rec.get("input_text") or "",
+                    "output_text": rec.get("output_text") or "",
+                })
+                STATE["recent_seq"] = STATE.get("recent_seq", 0) + 1
+                if len(state_recent) > RECENT_LIMIT:
+                    del state_recent[: len(state_recent) - RECENT_LIMIT]
+            return
 
         # 兼容旧存档缺键：一律用 .get(k, 0) + v 防御累加
         s["inputOther"] = s.get("inputOther", 0) + other
@@ -240,6 +313,7 @@ def apply_record(rec):
         hh["cached"] = hh.get("cached", 0) + cached
         hh["output"] = hh.get("output", 0) + out
         hh["calls"] = hh.get("calls", 0) + 1
+        hh["cacheWrite"] = hh.get("cacheWrite", 0) + creation
         sh = _session_hour_slot(x, h)
         sh["input"] = sh.get("input", 0) + other
         sh["cached"] = sh.get("cached", 0) + cached
@@ -262,6 +336,7 @@ def apply_record(rec):
             "total": int(other + cached + out),
             "eventId": STATE["recent_seq"],
             "kind": "usage",
+            "source": source,
             "input_text": rec.get("input_text") or "",
             "output_text": rec.get("output_text") or "",
         })
@@ -273,6 +348,9 @@ def apply_record(rec):
 def apply_request(rec):
     """把一条 llm.request 事件（step 级请求）累加到 STATE，仅计数。"""
     with LOCK:
+        # 外部数据源没有 request 事件，直接跳过
+        if (rec.get("source") or "kimi") != "kimi":
+            return
         model = rec.get("modelAlias") or rec.get("model") or "(unknown)"
         ts = rec.get("time") or time.time() * 1000
         session = rec.get("session_id") or "(unknown)"
@@ -338,30 +416,87 @@ def apply_turn_end(rec):
         if rec.get("reason") != "failed":
             return
 
+        source = rec.get("source") or "kimi"
+
         ts = rec.get("time") or time.time() * 1000
         session = rec.get("session_id") or "(unknown)"
 
         # fork 会话复制段跳过（同 usage.record）
         # （延迟导入：is_fork_copy 定义于 collector 模块，避免模块循环依赖）
         from collector import is_fork_copy
-        if is_fork_copy(session, ts):
+        if source == "kimi" and is_fork_copy(session, ts):
             return
 
         # 指纹去重（三层防线，见 state 模块文件头注释）。turn.ended 本身无 model
         # 字段，主指纹用 (ts, src, turnId)；老记录回放只查全局兜底 (ts, turnId)。
-        fp = (ts, rec.get("src") or "", rec.get("turnId"))
-        fp_g = (ts, rec.get("turnId"))
-        if time.time() * 1000 - ts > SEEN_OLD_THRESHOLD_MS:
-            if fp_g in SEEN_TURN_G:
-                return
-        else:
+        # 外部源的 turnId 加 source 前缀，避免与 kimi 的 turnId 撞全局兜底；
+        # 其指纹同样去掉 ts：以 turnId 为准，保证水位重扫幂等（同源同回合只计一次）。
+        # 主指纹保持 3 元（ts, src, turnId）结构：外部源首个元素用占位串 "ext"，
+        # 第二个元素放 source，与 seen_turn 表 3 列兼容。
+        turn_id = rec.get("turnId")
+        if source != "kimi":
+            turn_id = f"{source}:{turn_id}"
+            fp = ("ext", source, turn_id)
             if fp in SEEN_TURN:
                 return
             SEEN_TURN.add(fp)
-        SEEN_TURN_G.add(fp_g)  # 通过（被计数）的记录同时加入全局兜底集合
+        else:
+            fp = (ts, rec.get("src") or "", turn_id)
+            fp_g = (ts, turn_id)
+            if time.time() * 1000 - ts > SEEN_OLD_THRESHOLD_MS:
+                if fp_g in SEEN_TURN_G:
+                    return
+            else:
+                if fp in SEEN_TURN:
+                    return
+                SEEN_TURN.add(fp)
+            SEEN_TURN_G.add(fp_g)  # 通过（被计数）的记录同时加入全局兜底集合
 
         date = day_of(ts)
         s = _slot(STATE["days"], date)
+
+        # 外部数据源（zcode/dsh）：失败只记 by_source 槽，不进顶层 requests/fails
+        # （顶部守卫已保证 reason == "failed"）
+        if source != "kimi":
+            ss = _source_slot(s, source)
+            ss["failed"] = ss.get("failed", 0) + 1
+            model = rec.get("model") or "(unknown)"
+            fm = _model_slot(ss, model)
+            fm["failed"] = fm.get("failed", 0) + 1
+            scope = rec.get("scope") or "main"
+            err = rec.get("error") or {}
+            err_code = err.get("code") or ""
+            err_msg = (err.get("message") or "")[:300]
+
+            state_recent = STATE["recent"]
+            if not rec.get("replay"):  # 历史回放不推实时事件流/失败缓冲
+                state_recent.append({
+                    "time": int(ts), "date": date, "hour": hour_of(ts),
+                    "model": model, "session": session, "scope": scope,
+                    "input": 0, "cached": 0, "output": 0, "total": 0,
+                    "eventId": STATE["recent_seq"],
+                    "kind": "failed",
+                    "source": source,
+                    "err_code": err_code,
+                    "err_msg": err_msg,
+                    "input_text": rec.get("input_text") or "",
+                    "output_text": "",
+                })
+                STATE["recent_seq"] = STATE.get("recent_seq", 0) + 1
+                if len(state_recent) > RECENT_LIMIT:
+                    del state_recent[: len(state_recent) - RECENT_LIMIT]
+
+                state_fails = STATE["fails"]
+                state_fails.append({
+                    "time": int(ts), "date": date, "hour": hour_of(ts),
+                    "model": model, "session": session, "scope": scope,
+                    "source": source,
+                    "err_code": err_code, "err_msg": err_msg,
+                })
+                if len(state_fails) > FAILS_LIMIT:
+                    del state_fails[: len(state_fails) - FAILS_LIMIT]
+            return
+
         # 模型归属：turn.ended 无 model 字段，取该 wire 最近一次 llm.request 的模型
         model = STATE["last_model"].get(rec.get("src") or "") or "(unknown)"
         scope = rec.get("scope") or "main"
@@ -399,6 +534,7 @@ def apply_turn_end(rec):
             "input": 0, "cached": 0, "output": 0, "total": 0,
             "eventId": STATE["recent_seq"],
             "kind": "failed",
+            "source": source,
             "err_code": err_code,
             "err_msg": err_msg,
             "input_text": rec.get("input_text") or "",
@@ -411,8 +547,9 @@ def apply_turn_end(rec):
         # 失败明细缓冲（独立于 recent，供模型详情等页面回溯历史失败）
         state_fails = STATE["fails"]
         state_fails.append({
-            "time": int(ts), "date": date, "model": model,
-            "session": session, "scope": scope,
+            "time": int(ts), "date": date, "hour": hour_of(ts),
+            "model": model, "session": session, "scope": scope,
+            "source": source,
             "err_code": err_code, "err_msg": err_msg,
         })
         if len(state_fails) > FAILS_LIMIT:

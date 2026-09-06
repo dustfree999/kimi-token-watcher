@@ -74,11 +74,12 @@ STATE = {
     "last_model": {},  # path -> 最近一次 llm.request 的模型名（turn.ended 失败回合归属用）
     "last_scan_time": 0,
     "tracked_files": {},  # path -> offset (已读字节偏移)
+    "ext_state": {},  # 外部数据源采集状态（zcode 水位 / dsh 文件指纹），随 meta 持久化
     "scan_errors": [],
 }
 
-RECENT_LIMIT = 500
-FAILS_LIMIT = 300
+RECENT_LIMIT = 10000  # 事件流滚动缓冲：覆盖「近 30 天」回补窗口（高峰期每天 ~1500 条）
+FAILS_LIMIT = 1000   # 失败回合缓冲：失败量远小于调用量，1000 条约覆盖数周
 
 # 文件被截断/重建导致偏移重置为 0 时置位，collector 模块的 collector_loop
 # 每轮开头检查并立即存档。由 collector 通过 `state.TRUNCATED_FLAG` 读写，
@@ -90,8 +91,21 @@ TRUNCATED_FLAG = False
 # 完成后置位并随 meta 持久化（键 turn_backfill_done），后续启动跳过。
 TURN_BACKFILL_DONE = False
 
+# 事件流历史回补标记：recent 是滚动缓冲（回放 bug / 容量溢出会冲掉旧事件），
+# 首次启动时从 wire.jsonl 重读最近 RECENT_BACKFILL_DAYS 天的事件明细补回
+# recent/fails（只补展示层，不动聚合统计），完成后置位（键 recent_backfill_done）。
+RECENT_BACKFILL_DONE = False
+RECENT_BACKFILL_DAYS = 30  # 回补窗口：与「近 30 天」时间筛选对齐
+
+# 一次性标记：外部源（zcode/dsh）事件输入/输出文本回填是否已完成
+EXT_TEXT_BACKFILL_DONE = False
+
 # 指纹去重集合只保留最近 30 天的记录（超过的不会再被 fork 复制段触发），控制内存
 SEEN_RETENTION_MS = 30 * 24 * 3600 * 1000
+
+# 外部源（zcode/dsh）指纹不携带时间戳，按来源分桶、每来源最多保留 EXT_FP_KEEP 条
+# （裁剪逻辑见 prune_seen / _trim_ext_bucket）。
+EXT_FP_KEEP = 5000
 
 # 老记录回放阈值：记录的 ts 距当前处理时刻超过该时长时，仅查全局兜底集合去重
 SEEN_OLD_THRESHOLD_MS = 10 * 60 * 1000
@@ -194,6 +208,8 @@ def _init_db(conn):
         conn.execute("ALTER TABLE recent ADD COLUMN err_code TEXT DEFAULT ''")
     if "err_msg" not in recent_cols:
         conn.execute("ALTER TABLE recent ADD COLUMN err_msg TEXT DEFAULT ''")
+    if "source" not in recent_cols:
+        conn.execute("ALTER TABLE recent ADD COLUMN source TEXT DEFAULT 'kimi'")
 
 
 def _migrate_from_json(conn):
@@ -279,7 +295,7 @@ def load_state():
     """从 SQLite 恢复已读偏移、已聚合的 days、去重集合（重启后保持一致性）。
     首次启动且 data.json 存在时自动一次性迁移；数据损坏等异常回退为空状态
     （与旧版 except 行为一致）。seen 指纹按列存储天然区分主/全局集合，无需分流。"""
-    global TURN_BACKFILL_DONE
+    global TURN_BACKFILL_DONE, RECENT_BACKFILL_DONE, EXT_TEXT_BACKFILL_DONE
     try:
         first_run = not os.path.exists(DB_FILE)
         with sqlite3.connect(DB_FILE) as conn:
@@ -295,11 +311,11 @@ def load_state():
             for row in conn.execute(
                     "SELECT eventId, time, date, hour, model, session, scope, "
                     "input, cached, output, total, input_text, output_text, "
-                    "kind, err_code, err_msg "
+                    "kind, err_code, err_msg, source "
                     "FROM recent ORDER BY eventId"):
                 (eventId, tm, date, hour, model, session, scope, inp,
                  cached, out, total, input_text, output_text,
-                 kind, err_code, err_msg) = row
+                 kind, err_code, err_msg, source) = row
                 recent.append({
                     "time": tm, "date": date, "hour": hour,
                     "model": model, "session": session, "scope": scope,
@@ -308,6 +324,7 @@ def load_state():
                     "kind": kind or "usage",
                     "err_code": err_code or "",
                     "err_msg": err_msg or "",
+                    "source": source or "kimi",
                     "input_text": input_text or "",
                     "output_text": output_text or "",
                 })
@@ -339,8 +356,11 @@ def load_state():
             STATE["last_model"] = meta.get("last_model") or {}
             STATE["fails"] = meta.get("fails") or []
             TURN_BACKFILL_DONE = bool(meta.get("turn_backfill_done"))
+            RECENT_BACKFILL_DONE = bool(meta.get("recent_backfill_done"))
+            EXT_TEXT_BACKFILL_DONE = bool(meta.get("ext_text_backfill_done"))
             STATE["recent_seq"] = int(meta.get("recent_seq") or 0)
             STATE["last_scan_time"] = float(meta.get("last_scan_time") or 0)
+            STATE["ext_state"] = meta.get("ext_state") or {}
             STATE["scan_errors"] = (saved_errors + (meta.get("scan_errors") or []))[-10:]
             return (STATE["tracked_files"], days, seen_usage, seen_req,
                     seen_usage_g, seen_req_g, seen_turn, seen_turn_g, recent)
@@ -393,14 +413,14 @@ def save_state():
                     conn.executemany(
                         "INSERT OR REPLACE INTO recent (eventId, time, date, hour, model, "
                         "session, scope, input, cached, output, total, input_text, output_text, "
-                        "kind, err_code, err_msg) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "kind, err_code, err_msg, source) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         [(r.get("eventId"), r.get("time"), r.get("date"), r.get("hour"),
                           r.get("model"), r.get("session"), r.get("scope"),
                           r.get("input"), r.get("cached"), r.get("output"), r.get("total"),
                           r.get("input_text") or "", r.get("output_text") or "",
                           r.get("kind") or "usage", r.get("err_code") or "",
-                          r.get("err_msg") or "")
+                          r.get("err_msg") or "", r.get("source") or "kimi")
                          for r in STATE["recent"]])
                     meta = {
                         "tracked_files": STATE["tracked_files"],
@@ -409,8 +429,11 @@ def save_state():
                         "last_model": STATE["last_model"],
                         "fails": STATE["fails"],
                         "turn_backfill_done": bool(TURN_BACKFILL_DONE),
+                        "recent_backfill_done": bool(RECENT_BACKFILL_DONE),
+                        "ext_text_backfill_done": bool(EXT_TEXT_BACKFILL_DONE),
                         "recent_seq": str(STATE["recent_seq"]),
                         "last_scan_time": str(STATE["last_scan_time"]),
+                        "ext_state": STATE["ext_state"],
                         "scan_errors": STATE["scan_errors"],
                     }
                     for key, value in meta.items():
@@ -426,20 +449,63 @@ def add_error(msg):
         STATE["scan_errors"] = (STATE["scan_errors"] + [msg])[-10:]
 
 
+def _ext_fp_key(fp):
+    """ext 指纹的裁剪排序键：fp[1]/fp[2] 中 id 段可解析为数值（zcode rowid 等
+    单调 id）→ (0, id)，数值小的（旧）排前优先被裁、大的（新）保留；dsh 消息
+    uuid / zcode turnId 等不可排序段 → (1, 0) 整体排后，仅当该来源桶总量超过
+    EXT_FP_KEEP 时才参与剪裁。"""
+    for part in fp[1:3]:
+        if isinstance(part, str) and ":" in part:
+            try:
+                return (0, int(part.split(":", 1)[1]))
+            except ValueError:
+                continue
+    return (1, 0)
+
+
+def _trim_ext_bucket(items):
+    """单个外部源来源桶的有界保留：超出 EXT_FP_KEEP 时只保留“最近”的条数。"""
+    if len(items) <= EXT_FP_KEEP:
+        return items
+    items.sort(key=_ext_fp_key)
+    return items[len(items) - EXT_FP_KEEP:]
+
+
 def prune_seen(force=False):
     """按时间清理过期的 SEEN 指纹（主/全局集合），控制内存有界。
     用 intersection_update 原地收缩集合：保持各模块持有的 SEEN_* 引用为
     同一对象（若改为整体替换赋值，其他模块仍会看到旧集合，导致去重失效/漏存；
-    且增强赋值会把集合名绑定为局部变量，需避免）。"""
+    且增强赋值会把集合名绑定为局部变量，需避免）。
+    外部源（zcode/dsh）指纹首元素为字符串 "ext"（不携带时间戳，见 aggregate
+    模块），不能按时间裁剪：改为按来源分桶、每来源最多保留 EXT_FP_KEEP 条
+    （见 _trim_ext_bucket）。裁剪窗口 5000 远大于采集器单次回放跨度——zcode
+    增量扫描只会重读水位之后的新行（rowid 单调递增，按 id 裁旧保新正好只丢
+    永远不再重读的旧行）；dsh 整文件重扫以消息 id 为身份去重，单次全量重放
+    的消息条数远小于该上限，去重幂等性不受影响。"""
     now = time.time() * 1000
     with LOCK:
         if (force or len(SEEN_USAGE) > 20000 or len(SEEN_REQ) > 20000
                 or len(SEEN_USAGE_G) > 20000 or len(SEEN_REQ_G) > 20000
                 or len(SEEN_TURN) > 20000 or len(SEEN_TURN_G) > 20000):
             cutoff = now - SEEN_RETENTION_MS
-            SEEN_USAGE.intersection_update({fp for fp in SEEN_USAGE if fp[0] >= cutoff})
-            SEEN_REQ.intersection_update({fp for fp in SEEN_REQ if fp[0] >= cutoff})
-            SEEN_USAGE_G.intersection_update({fp for fp in SEEN_USAGE_G if fp[0] >= cutoff})
-            SEEN_REQ_G.intersection_update({fp for fp in SEEN_REQ_G if fp[0] >= cutoff})
-            SEEN_TURN.intersection_update({fp for fp in SEEN_TURN if fp[0] >= cutoff})
-            SEEN_TURN_G.intersection_update({fp for fp in SEEN_TURN_G if fp[0] >= cutoff})
+
+            def _trim(seenset):
+                keep = []
+                ext_buckets = {}
+                for fp in seenset:
+                    if isinstance(fp[0], str):
+                        # 外部源指纹：("ext", <source 或 "source:id">, ...)
+                        src = fp[1] if isinstance(fp[1], str) else str(fp[1])
+                        ext_buckets.setdefault(src.split(":", 1)[0], []).append(fp)
+                    elif fp[0] >= cutoff:
+                        keep.append(fp)  # kimi 指纹：30 天窗口
+                for bucket_fps in ext_buckets.values():
+                    keep.extend(_trim_ext_bucket(bucket_fps))
+                seenset.intersection_update(keep)
+
+            _trim(SEEN_USAGE)
+            _trim(SEEN_REQ)
+            _trim(SEEN_USAGE_G)
+            _trim(SEEN_REQ_G)
+            _trim(SEEN_TURN)
+            _trim(SEEN_TURN_G)
