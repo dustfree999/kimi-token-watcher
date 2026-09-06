@@ -125,10 +125,11 @@
 /* ---------- 主区 ---------- */
 .main { flex: 1; min-width: 0; background: var(--content); display: flex; flex-direction: column; }
 .topbar {
-  height: 52px; background: var(--bg);
+  min-height: 52px; background: var(--bg);
   border-bottom: 1px solid var(--line);
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 20px; flex-shrink: 0; gap: 12px; flex-wrap: wrap;
+  padding: 6px 20px; flex-shrink: 0; gap: 12px; flex-wrap: wrap;
+  align-content: center;
 }
 .tb-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
 .tb-title h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.2px; }

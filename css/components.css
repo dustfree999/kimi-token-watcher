@@ -23,6 +23,9 @@
   background: var(--accent); color: #fff; font-weight: 500;
 }
 .range-switch button:disabled, .chart-filter button:disabled { cursor: not-allowed; opacity: .4; }
+/* 来源筛选 chips 内的小数字注记（如 ZCode · 604） */
+.range-switch button .ss-calls { font-size: 10px; opacity: .75; margin-left: 4px; font-variant-numeric: tabular-nums; }
+.range-switch button.active .ss-calls { opacity: .9; }
 
 .refresh-hint { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); white-space: nowrap; }
 .refresh-hint .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); display: inline-block; box-shadow: 0 0 6px rgba(63,185,80,.5); }
@@ -278,7 +281,7 @@
   margin-right: 5px; flex: none;
 }
 /* 表列模板 */
-.evt { grid-template-columns: 74px 40px minmax(120px, 1.5fr) 46px 52px 52px 52px 52px 60px minmax(70px, 1fr) 30px; }
+.evt { grid-template-columns: 96px 40px minmax(120px, 1.5fr) 46px 52px 52px 52px 52px 60px minmax(70px, 1fr) 30px; }
 .mot { grid-template-columns: minmax(140px, 1.6fr) 72px 62px 56px 72px 56px 50px 50px 44px 52px 66px; }
 .sst { grid-template-columns: minmax(110px, 1.4fr) 34px 62px 60px 58px 72px 58px 50px 50px 30px; }
 .htt { grid-template-columns: 92px 70px 64px 64px 58px 62px 52px 52px 60px; }
@@ -346,6 +349,12 @@
 .pager button:hover { border-color: var(--bd); color: var(--text); }
 .pager button.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
 .pager button:disabled { opacity: .4; cursor: not-allowed; }
+.pager .pg-size, .pager .pg-jump-input {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text-2);
+  font-size: 11px; padding: 3px 6px; border-radius: 4px; font-family: inherit;
+}
+.pager .pg-jump-input { width: 48px; }
+.pager .pg-tail { color: var(--muted); font-size: 11px; font-family: var(--mono); margin-left: auto; display: flex; align-items: center; gap: 6px; }
 
 /* ---------- 设置页 ---------- */
 .gs-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }

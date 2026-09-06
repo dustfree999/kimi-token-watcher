@@ -80,6 +80,7 @@
         <span class="tb-sub muted" id="page-subtitle">今日数据总览</span>
       </div>
       <div class="tb-right">
+        <div class="range-switch" id="source-switch"></div>
         <div class="range-switch" id="range-switch">
           <button data-range="today" class="active">今日</button>
           <button data-range="week">7天</button>
@@ -188,6 +189,7 @@
               <span class="lg"><i class="sw in"></i>输入未命中</span>
               <span class="lg"><i class="sw cache"></i>缓存命中</span>
               <span class="lg"><i class="sw out"></i>输出</span>
+              <span class="lg"><i class="sw cwrite"></i>缓存写</span>
               <span class="lg"><i class="sw req"></i>请求次数</span>
             </div>
           </div>
@@ -246,7 +248,6 @@
             </div>
             <div class="ph-right">
               <select id="ev-model-filter" aria-label="模型筛选"><option value="">全部模型</option></select>
-              <button class="link-btn" id="ev-more">查看全部事件 →</button>
             </div>
           </div>
           <div class="table-wrap">

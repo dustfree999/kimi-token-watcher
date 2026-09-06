@@ -11,9 +11,9 @@ window.Views = (function () {
 
   const state = { view: "overview", model: null, session: null };
   const pages = { events: 1, models: 1, sessions: 1, history: 1, cost: 1 };
-  const EV_PAGE = 20;     // 实时事件每页 20 条（设计稿）
+  const EV_PAGE = 20;     // 实时事件默认每页 20 条（设计稿；可在分页器切换 10/20/50）
   const PAGE10 = 10;      // 其余列表每页 10 条（设计稿）
-  let evAll = false;      // 事件页：默认 60 条，true 最多 200
+  let evSize = EV_PAGE;   // 事件页当前每页条数（分页器「N 条/页」下拉）
   let evExpanded = new Set();
   let settingsInit = false;
   let lastSig = "";
@@ -66,7 +66,7 @@ window.Views = (function () {
     for (let i = n - 1; i >= 0; i--) {
       const d = new Date(now.getTime() - i * DAY_MS);
       const key = localDateKey(d);
-      out.push({ key, label: key.slice(5), day: (data.days || {})[key] || emptyDay(key) });
+      out.push({ key, label: key.slice(5), day: projectDay((data.days || {})[key]) || emptyDay(key) });
     }
     return out;
   }
@@ -103,30 +103,62 @@ window.Views = (function () {
 
   /* ---------------- 通用图表（js/charts.js） ---------------- */
   const { stackedChart, barChart, lineChart, donutChart } = window.Charts;
-  /** 通用分页器 */
-  function putPager(container, page, totalPg, onGo) {
+  /** 通用分页器（total 为总条数，用于展示「共 N 条 · 第 X/Y 页」）。
+   *  opts.sizes + opts.size + opts.onSize：右侧加「N 条/页」下拉；
+   *  opts.jump：右侧加「跳至 __ 页」输入（回车/按钮跳转，自动钳制范围）。 */
+  function putPager(container, page, totalPg, total, onGo, opts) {
     if (!container) return;
-    if (totalPg <= 1) { container.innerHTML = ""; return; }
-    const parts = [`<span class="pg-info">共 ${totalPg} 页</span>`];
-    parts.push(`<button data-goto="${page - 1}" ${page <= 1 ? "disabled" : ""}>‹</button>`);
-    const nums = [];
-    for (let i = 1; i <= totalPg; i++) {
-      if (i === 1 || i === totalPg || Math.abs(i - page) <= 3) nums.push(i);
-      else if (nums[nums.length - 1] !== "…") nums.push("…");
+    opts = opts || {};
+    const tail = [];
+    if (opts.sizes && opts.sizes.length) {
+      tail.push(`<select class="pg-size">` +
+        opts.sizes.map(s => `<option value="${s}" ${s === opts.size ? "selected" : ""}>${s} 条/页</option>`).join("") +
+        `</select>`);
     }
-    for (const n of nums) {
-      parts.push(n === "…"
-        ? `<span style="color:var(--muted);font-size:11px;padding:0 4px">…</span>`
-        : `<button data-goto="${n}" class="${n === page ? "active" : ""}">${n}</button>`);
+    if (opts.jump) {
+      tail.push(`跳至 <input class="pg-jump-input" type="number" min="1" max="${totalPg}" value="${page}"> 页` +
+        `<button data-jump="1">跳转</button>`);
     }
-    parts.push(`<button data-goto="${page + 1}" ${page >= totalPg ? "disabled" : ""}>›</button>`);
-    container.innerHTML = parts.join("");
+    const tailHtml = tail.length ? `<span class="pg-tail">${tail.join("")}</span>` : "";
+    if (totalPg <= 1) {
+      container.innerHTML = (total > 0 ? `<span class="pg-info">共 ${total} 条</span>` : "") + tailHtml;
+    } else {
+      const parts = [`<span class="pg-info">共 ${total} 条 · 第 ${page}/${totalPg} 页</span>`];
+      parts.push(`<button data-goto="${page - 1}" ${page <= 1 ? "disabled" : ""}>‹</button>`);
+      const nums = [];
+      for (let i = 1; i <= totalPg; i++) {
+        if (i === 1 || i === totalPg || Math.abs(i - page) <= 3) nums.push(i);
+        else if (nums[nums.length - 1] !== "…") nums.push("…");
+      }
+      for (const n of nums) {
+        parts.push(n === "…"
+          ? `<span style="color:var(--muted);font-size:11px;padding:0 4px">…</span>`
+          : `<button data-goto="${n}" class="${n === page ? "active" : ""}">${n}</button>`);
+      }
+      parts.push(`<button data-goto="${page + 1}" ${page >= totalPg ? "disabled" : ""}>›</button>`);
+      parts.push(tailHtml);
+      container.innerHTML = parts.join("");
+    }
     container.querySelectorAll("button[data-goto]").forEach(b => {
       b.addEventListener("click", () => {
         if (b.disabled) return;
         onGo(parseInt(b.dataset.goto, 10));
       });
     });
+    const sizeSel = container.querySelector(".pg-size");
+    if (sizeSel && opts.onSize) {
+      sizeSel.addEventListener("change", () => opts.onSize(parseInt(sizeSel.value, 10)));
+    }
+    const jumpInput = container.querySelector(".pg-jump-input");
+    const jumpBtn = container.querySelector("button[data-jump]");
+    if (jumpInput) {
+      const doJump = () => {
+        const v = parseInt(jumpInput.value, 10);
+        if (!isNaN(v)) onGo(Math.min(Math.max(v, 1), totalPg));
+      };
+      jumpInput.addEventListener("keydown", e => { if (e.key === "Enter") doJump(); });
+      if (jumpBtn) jumpBtn.addEventListener("click", doJump);
+    }
   }
 
   /* ---------------- 视图渲染 ---------------- */
@@ -143,52 +175,95 @@ window.Views = (function () {
     else if (v === "settings") renderSettings();
   }
 
-  /* ---------- 视图：实时事件 ---------- */
+  /* ---------- 视图：实时事件（服务端分页 /api/events） ---------- */
+  // 事件页数据缓存：仅在查询键变化或 Live 刷新到时才请求 /api/events，
+  // 渲染永远基于缓存（避免轮询闪烁）；seq 防止慢响应乱序覆盖新结果。
+  const evData = { key: "", filterKey: "", items: [], total: 0, models: [],
+                   error: null, loading: false, seq: 0, lastFetch: 0 };
+
+  function evQueryOf(data) {
+    const keys = rangeDayKeys(data);
+    const q = {
+      from: keys[0], to: keys[keys.length - 1],
+      source: sourceFilter || "all",
+      scope: evFilter.scope || "all",
+      model: evFilter.model || "",
+      page: pages.events, size: evSize,
+    };
+    q.key = [q.from, q.to, q.source, q.scope, q.model, q.page, q.size].join("|");
+    return q;
+  }
+
+  async function fetchEvents(q) {
+    const mySeq = ++evData.seq;
+    evData.loading = true;
+    try {
+      const params = new URLSearchParams({
+        from: q.from, to: q.to, source: q.source, scope: q.scope,
+        page: String(q.page), size: String(q.size),
+      });
+      if (q.model) params.set("model", q.model);
+      const resp = await fetch("/api/events?" + params.toString(), { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const j = await resp.json();
+      if (mySeq !== evData.seq) return; // 已有更新的请求在途，丢弃旧结果
+      evData.items = j.items || [];
+      evData.total = j.total || 0;
+      evData.models = j.models || [];
+      evData.error = null;
+      evData.key = q.key;
+      // 页码越界回收到末页（筛选后总数缩水时），下次渲染因 key 变化自动重取
+      const maxPg = Math.max(Math.ceil(evData.total / q.size), 1);
+      if (q.page > maxPg) pages.events = maxPg;
+    } catch (e) {
+      if (mySeq === evData.seq) evData.error = String(e);
+    } finally {
+      if (mySeq === evData.seq) {
+        evData.loading = false;
+        evData.lastFetch = Date.now();
+        if (state.view === "events" && current) renderEventsView(current);
+      }
+    }
+  }
+
   function renderEventsView(data) {
     // 事件流跟随顶部范围筛选（今日 / 近 7 天 / 近 30 天 / 自定义）
     const rl = rangeLabel();
-    const validKeys = new Set(rangeDayKeys(data));
-    const isFailScope = evFilter.scope === "failed";
-    // 失败模式从独立失败缓冲读取，避免被 recent 60 条截断
-    const cap = evAll ? 200 : (isFailScope ? 500 : 60);
-    let evs;
-    if (isFailScope) {
-      evs = (data.fails || [])
-        .filter(e => validKeys.has(e.date))
-        .slice(0, cap)
-        .map(e => Object.assign({}, e, { kind: "failed", input: 0, cached: 0, output: 0, total: 0, input_text: "", output_text: "" }));
-    } else {
-      evs = (data.recent || []).filter(e => validKeys.has(e.date)).slice(0, cap);
-    }
+    // 过滤条件（不含页码）变化时回到第 1 页
+    const keys0 = rangeDayKeys(data);
+    const filterKey = [keys0[0], keys0[keys0.length - 1], sourceFilter, evFilter.scope, evFilter.model].join("|");
+    if (filterKey !== evData.filterKey) { pages.events = 1; evData.filterKey = filterKey; }
+    const q = evQueryOf(data);
+    // Live：停留在第 1 页时跟随轮询节奏重新拉取（节流 1.5s）
+    const liveDue = q.page === 1 && (Date.now() - evData.lastFetch > 1500);
+    if ((q.key !== evData.key || liveDue) && !evData.loading) fetchEvents(q);
+
     const hint = el("event-follow-hint");
-    if (hint) hint.textContent = "每 2 秒自动刷新 · 点击行展开详情 · " + rl;
-    let shown = evs;
-    if (!isFailScope) {
-      if (evFilter.scope === "main") shown = shown.filter(e => e.scope !== "subagent");
-      else if (evFilter.scope === "sub") shown = shown.filter(e => e.scope === "subagent");
-    }
-    if (evFilter.model) shown = shown.filter(e => e.model === evFilter.model);
+    if (hint) hint.textContent = "每 2 秒自动刷新 · 点击行展开详情 · " + rl + " · 服务端分页 · 缓冲上限 10000 条";
     const countEl = el("event-count");
-    if (countEl) countEl.textContent = shown.length + " events · " + rl;
-    const sel = el("ev-model-filter");
-    if (sel) {
-      const models = [...new Set(evs.map(e => e.model).filter(Boolean))].sort();
-      const cur = sel.value;
-      sel.innerHTML = '<option value="">全部模型</option>' +
-        models.map(m => `<option value="${esc(m)}">${esc(modelLabel(m))}</option>`).join("");
-      if (models.includes(cur)) sel.value = cur;
-    }
-    const totalPg = Math.max(Math.ceil(shown.length / EV_PAGE), 1);
-    if (pages.events > totalPg) pages.events = totalPg;
-    const slice = shown.slice((pages.events - 1) * EV_PAGE, pages.events * EV_PAGE);
+    if (countEl) countEl.textContent = evData.total + " events · " + rl;
+    const totalPg = Math.max(Math.ceil(evData.total / evSize), 1);
+    const items = evData.items;
     const rowsEl = el("event-rows");
     if (!rowsEl) return;
-    const sigKey = "ev" + pages.events + "|" + evFilter.scope + "|" + evFilter.model + "|" + (isFailScope ? "F" : "N") + "|" + (evAll ? "A" : "B") + "|" +
-      slice.map(e => keyOf(e)).join(",");
-    if (chg(sigKey, slice.map(e => [keyOf(e), e.scope, e.model, e.input, e.cached, e.output, e.kind, e.err_code]))) {
+    const sigKey = "ev" + q.key + "|" + evData.total + "|" + (evData.error || "") +
+      (items.length ? "" : (evData.loading ? "L" : "")) + "|" +
+      evData.models.join(",") + "|" + items.map(e => keyOf(e)).join(",");
+    if (chg(sigKey, items.map(e => [keyOf(e), e.scope, e.model, e.input, e.cached, e.output, e.kind, e.err_code, e.total, e.time, e.session]))) {
+      // 模型下拉：服务端按日期+来源口径给可选模型，保留当前选中
+      const sel = el("ev-model-filter");
+      if (sel) {
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">全部模型</option>' +
+          evData.models.map(m => `<option value="${esc(m)}">${esc(modelLabel(m))}</option>`).join("");
+        if (evData.models.includes(cur)) sel.value = cur;
+      }
       rowsEl.innerHTML = "";
-      if (!slice.length) {
-        rowsEl.innerHTML = '<div class="tt-empty">该过滤条件下暂无事件</div>';
+      if (!items.length) {
+        rowsEl.innerHTML = '<div class="tt-empty">' +
+          (evData.loading ? "加载中…"
+            : evData.error ? "事件加载失败：" + esc(evData.error)
+            : "该过滤条件下暂无事件") + "</div>";
       } else {
         const head = document.createElement("div");
         head.className = "tt-head evt";
@@ -197,7 +272,7 @@ window.Views = (function () {
           `<span class="tt-num">输入</span><span class="tt-num">缓存命中</span><span class="tt-num">命中率</span><span class="tt-num">输出</span>` +
           `<span class="tt-num">总 Tokens</span><span>会话 ID</span><span>操作</span>`;
         rowsEl.appendChild(head);
-        for (const ev of slice) {
+        for (const ev of items) {
           const key = keyOf(ev);
           const scope = ev.scope === "subagent" ? "sub" : "main";
           const meta = (data.session_meta || {})[ev.session] || {};
@@ -246,7 +321,7 @@ window.Views = (function () {
             ? "—"
             : ((ev.cached || 0) / totalIn * 100).toFixed(1) + "%";
           row.innerHTML =
-            `<span class="tt-num" style="color:var(--muted)">${esc(String(new Date(ev.time).toTimeString().slice(0, 8)))}</span>` +
+            `<span class="tt-num" style="color:var(--muted)" title="${esc(mmddTime(ev.time))}">${esc(range === "today" ? String(new Date(ev.time).toTimeString().slice(0, 8)) : mmddTime(ev.time))}</span>` +
             `<span>${typeBadge}</span>` +
             `<span class="tt-name" style="cursor:default" title="${esc(ev.model)}">${esc(modelLabel(ev.model))}</span>` +
             `<span><span class="ev-scope ${scope}">${scope === "sub" ? "子" : "主"}</span></span>` +
@@ -261,7 +336,10 @@ window.Views = (function () {
             `<span class="tt-exp" title="展开详情">${hasText ? (isOpen ? "▲" : "▼") : "—"}</span>`;
           row.appendChild(detail);
           if (hasText) {
-            row.addEventListener("click", () => {
+            row.addEventListener("click", (e) => {
+              // 详情区内部的点击（选中文字、复制按钮等）不触发折叠，
+              // 否则拖选/Ctrl+C 时面板被收起、选区清空，无法复制
+              if (e.target.closest(".tt-detail")) return;
               const open = detail.classList.contains("hidden");
               detail.classList.toggle("hidden", !open);
               const t = row.querySelector(".tt-exp");
@@ -273,11 +351,19 @@ window.Views = (function () {
         }
       }
     }
-    const moreBtn = el("ev-more");
-    if (moreBtn) moreBtn.textContent = evAll
-      ? `收起（${isFailScope ? 500 : 200} 条）`
-      : (isFailScope ? "查看全部失败 →" : "查看全部事件 →");
-    putPager(el("ev-pager"), pages.events, totalPg, p => { pages.events = p; if (current) renderView(current, range); });
+    // 仅在跳页输入框/条数下拉持有焦点（用户正在输入）时跳过重建，
+    // 避免轮询打断输入；按钮点击不在此列（点了就要立即反映新页码）
+    const pagerEl = el("ev-pager");
+    const ae = document.activeElement;
+    const pagerEditing = pagerEl && ae &&
+      (ae.classList.contains("pg-jump-input") || ae.classList.contains("pg-size"));
+    if (!pagerEditing) {
+      putPager(pagerEl, pages.events, totalPg, evData.total, p => { pages.events = p; if (current) renderView(current, range); }, {
+        size: evSize, sizes: [10, 20, 50],
+        onSize: s => { evSize = s; pages.events = 1; if (current) renderView(current, range); },
+        jump: true,
+      });
+    }
   }
 
   /* ---------- 件：模型分析 ---------- */
@@ -297,7 +383,7 @@ window.Views = (function () {
     if (pages.models > totalPg) pages.models = totalPg;
     const slice = models.slice((pages.models - 1) * PAGE10, pages.models * PAGE10);
     const rowsEl = el("mo-rows");
-    if (chg("mo" + pages.models, slice.map(m => [m.model, totOf(m), m.failed || 0, (m.calls || 0) + (m.failed || 0)]))) {
+    if (chg("mo" + pages.models, slice.map(m => [m.model, totOf(m), m.failed || 0, (m.calls || 0) + (m.failed || 0), costOf(m, m.model), m.requests || 0]))) {
       rowsEl.innerHTML = "";
       if (!slice.length) {
         rowsEl.innerHTML = '<div class="tt-empty">暂无记录</div>';
@@ -334,7 +420,7 @@ window.Views = (function () {
         }
       }
     }
-    putPager(el("mo-pager"), pages.models, totalPg, p => { pages.models = p; if (current) renderView(current, range); });
+    putPager(el("mo-pager"), pages.models, totalPg, models.length, p => { pages.models = p; if (current) renderView(current, range); });
   }
 
   /* ---------- 件：模型详情 ---------- */
@@ -356,7 +442,7 @@ window.Views = (function () {
     let bks;
     if (range === "today") {
       if (mdSub) mdSub.textContent = rl + " · 按小时";
-      const mh = ((((data.days || {})[data.today] || {}).by_model || {})[model] || {});
+      const mh = ((projectDay((data.days || {})[data.today]) || {}).by_model || {})[model] || {};
       const hourly = mh.hourly || {};
       bks = [];
       for (let h = 0; h < 24; h++) {
@@ -366,7 +452,7 @@ window.Views = (function () {
     } else {
       if (mdSub) mdSub.textContent = rl + " · 按日";
       bks = dKeys.map(k => {
-        const dm = (((data.days || {})[k] || {}).by_model || {})[model] || {};
+        const dm = ((projectDay((data.days || {})[k]) || {}).by_model || {})[model] || {};
         return { label: k.slice(5), v: [dm.inputOther || 0, dm.inputCacheRead || 0, dm.output || 0] };
       });
     }
@@ -376,7 +462,7 @@ window.Views = (function () {
     const inSess = sessions.filter(s => (s.by_model || {})[model]);
     const maxS = Math.max(...inSess.map(s => totOf((s.by_model || {})[model] || {})), 1);
     const srows = el("md-sess-rows");
-    const sSig = inSess.map(s => [s.session, totOf((s.by_model || {})[model] || {})]);
+    const sSig = inSess.map(s => [s.session, totOf((s.by_model || {})[model] || {}), costOf((s.by_model || {})[model] || {}, model)]);
     if (chg("mdsess", sSig)) {
       srows.innerHTML = "";
       if (!inSess.length) {
@@ -452,7 +538,7 @@ window.Views = (function () {
     if (pages.sessions > totalPg) pages.sessions = totalPg;
     const slice = sessions.slice((pages.sessions - 1) * PAGE10, pages.sessions * PAGE10);
     const rowsEl = el("ss-rows");
-    const sig = slice.map(s => [s.session, totOf(s)]);
+    const sig = slice.map(s => [s.session, totOf(s), s.requests || 0, s.inputOther || 0, s.inputCacheRead || 0]);
     if (chg("ss" + pages.sessions, sig)) {
       rowsEl.innerHTML = "";
       if (!slice.length) {
@@ -506,7 +592,7 @@ window.Views = (function () {
         }
       }
     }
-    putPager(el("ss-pager"), pages.sessions, totalPg, p => { pages.sessions = p; if (current) renderView(current, range); });
+    putPager(el("ss-pager"), pages.sessions, totalPg, sessions.length, p => { pages.sessions = p; if (current) renderView(current, range); });
   }
 
   /* ---------- 件：会话详情 ---------- */
@@ -528,7 +614,7 @@ window.Views = (function () {
     const sdSub = el("sd-trend-sub");
     if (sdSub) sdSub.textContent = rl + " · 按日";
     const bks = dKeys.map(k => {
-      const dm = (((data.days || {})[k] || {}).by_session || {})[sid] || {};
+      const dm = ((projectDay((data.days || {})[k]) || {}).by_session || {})[sid] || {};
       return { label: k.slice(5), v: [dm.inputOther || 0, dm.inputCacheRead || 0, dm.output || 0] };
     });
     stackedChart(el("sd-chart"), el("sd-axis"), bks);
@@ -579,7 +665,7 @@ window.Views = (function () {
 
   /* ---------- 件：历史统计 ---------- */
   function renderHistoryView(data) {
-    const allDays = Object.values(data.days || {}).sort((a, b) => a.date.localeCompare(b.date));
+    const allDays = Object.values(data.days || {}).map(d => projectDay(d)).sort((a, b) => a.date.localeCompare(b.date));
     // 历史窗口跟随顶部切换（今日 / 7天 / 30天 / 自定义）
     const dKeys = rangeDayKeys(data);
     const keySet = new Set(dKeys);
@@ -619,7 +705,7 @@ window.Views = (function () {
     if (pages.history > totalPg) pages.history = totalPg;
     const slice2 = desc.slice((pages.history - 1) * PAGE10, pages.history * PAGE10);
     const rowsEl = el("ht-rows");
-    if (chg("ht" + pages.history + dKeys.join(""), slice2.map(d => [d.date, totOf(d)]))) {
+    if (chg("ht" + pages.history + dKeys.join(""), slice2.map(d => [d.date, totOf(d), costOfAgg(d)]))) {
       rowsEl.innerHTML = "";
       if (!slice2.length) { rowsEl.innerHTML = '<div class="tt-empty">暂无记录</div>'; }
       else {
@@ -648,7 +734,7 @@ window.Views = (function () {
         }
       }
     }
-    putPager(el("ht-pager"), pages.history, totalPg, p => { pages.history = p; if (current) renderView(current, range); });
+    putPager(el("ht-pager"), pages.history, totalPg, desc.length, p => { pages.history = p; if (current) renderView(current, range); });
   }
 
   /* ---------- 件：费用分析 ---------- */
@@ -660,7 +746,7 @@ window.Views = (function () {
     const k30 = dayList(data, 30).map(x => x.key);
     const todayK = dayList(data, 1)[0].key;
     const yKey = dayList(data, 2)[0].key;
-    const costOfKey = k => costOfAgg(days[k] || emptyDay(k));
+    const costOfKey = k => costOfAgg(projectDay(days[k]) || emptyDay(k));
     const cToday = costOfKey(todayK);
     const cYest = costOfKey(yKey);
     const cWeek = k30.slice(-7).reduce((a, k) => a + costOfKey(k), 0);
@@ -698,7 +784,7 @@ window.Views = (function () {
     // 费用构成（按窗口天数，尊重按模型定价）
     const partAgg = { miss: 0, cache: 0, cwrite: 0, out: 0 };
     for (const k of dKeys) {
-      const comps = costPartsOf(days[k] || emptyDay(k));
+      const comps = costPartsOf(projectDay(days[k]) || emptyDay(k));
       partAgg.miss += comps[0].value;
       partAgg.cache += comps[1].value;
       partAgg.cwrite += comps[2].value;
@@ -728,7 +814,7 @@ window.Views = (function () {
           `<span class="tt-num">输出</span><span class="tt-num">总费用</span>`;
         rowsEl.appendChild(head);
         for (const k of slice2) {
-          const comps = costPartsOf(days[k] || emptyDay(k));
+          const comps = costPartsOf(projectDay(days[k]) || emptyDay(k));
           const ms = comps[0].value, ck = comps[1].value, cw = comps[2].value, ot = comps[3].value;
           const r = document.createElement("div");
           r.className = "tt-row cst";
@@ -743,7 +829,7 @@ window.Views = (function () {
         }
       }
     }
-    putPager(el("cs-pager"), pages.cost, totalPg, p => { pages.cost = p; if (current) renderView(current, range); });
+    putPager(el("cs-pager"), pages.cost, totalPg, desc.length, p => { pages.cost = p; if (current) renderView(current, range); });
   }
 
   /* ---------- 件：设置 ---------- */
@@ -755,9 +841,9 @@ window.Views = (function () {
     if (ae !== el("p-cache")) el("p-cache").value = prices.cache;
     if (ae !== el("p-cwrite")) el("p-cwrite").value = prices.cwrite;
     if (ae !== el("p-out")) el("p-out").value = prices.out;
-    // 按模型定价表格：如果当前焦点不在表格内则重建，否则只同步来源标签与计数
+    // 按模型定价表格：有未保存编辑或焦点在表格内时只同步来源标签，否则按已保存数据重建
     const tbody = el("pm-rows");
-    if (tbody && !tbody.contains(ae)) {
+    if (tbody && !pmDirty && !tbody.contains(ae)) {
       buildModelRows();
     } else if (tbody) {
       updateModelRowSources();
@@ -780,7 +866,7 @@ window.Views = (function () {
     renderCatalogCard();
     // 数据管理信息
     const gsDir = el("gs-dir"), gsFiles = el("gs-files");
-    if (gsDir) gsDir.textContent = current && current.session_root ? current.session_root : state.SESSION_ROOT || "~/.kimi-code/sessions";
+    if (gsDir) gsDir.textContent = (current && ((current.source_paths || {})[sourceFilter] || current.session_root)) || "~/.kimi-code/sessions";
     if (gsFiles) gsFiles.textContent = (current && current.tracked_files != null ? current.tracked_files : "—") + " 个日志文件";
   }
 
@@ -874,6 +960,7 @@ window.Views = (function () {
   }
 
   /* ---------- 设置页：按模型定价表格 ---------- */
+  let pmDirty = false; // 表格有未保存的编辑（填充/添加/改动）：轮询重建时跳过，避免冲掉未保存的行
   function addModelRow(name, vals) {
     const tbody = el("pm-rows");
     if (!tbody) return;
@@ -914,11 +1001,12 @@ window.Views = (function () {
       span.textContent = badge.text;
     }
   }
-  /** 从 prices.models 重建全部按模型定价行 */
+  /** 从 prices.models 重建全部按模型定价行（重建即视为无未保存编辑） */
   function buildModelRows() {
     const tbody = el("pm-rows");
     if (!tbody) return;
     tbody.innerHTML = "";
+    pmDirty = false;
     const models = prices.models || {};
     if (!Object.keys(models).length) {
       tbody.innerHTML = '<tr><td colspan="7" class="pm-empty">暂无手动定价模型，可点击「从目录填充」或「+ 添加」。</td></tr>';
@@ -968,6 +1056,7 @@ window.Views = (function () {
     // 移除空提示行
     const empty = tbody.querySelector(".pm-empty");
     if (empty && Object.keys(prices.models || {}).length + added > 0) empty.closest("tr").remove();
+    if (added) pmDirty = true; // 未保存：轮询期间不重建表格
     filterModelRows();
     updateModelCount();
     const st = el("pm-fill-status");
@@ -1001,7 +1090,7 @@ window.Views = (function () {
     const days = current.days || {};
     const rows = [["日期", "输入未命中", "缓存命中", "缓存写入", "输出", "总Tokens", "请求数", "回合数", "失败数", "费用(元)"]];
     Object.keys(days).sort().forEach(k => {
-      const d = days[k];
+      const d = projectDay(days[k]);
       rows.push([k, d.inputOther || 0, d.inputCacheRead || 0, d.inputCacheCreation || 0, d.output || 0,
         totOf(d), d.requests || 0, d.calls || 0, d.failed || 0, +(costOfAgg(d).toFixed(4))]);
     });
@@ -1010,7 +1099,7 @@ window.Views = (function () {
   function exportModelsCSV() {
     if (!current) return;
     const agg = {};
-    for (const d of Object.values(current.days || {})) {
+    for (const d of Object.values(current.days || {}).map(x => projectDay(x))) {
       for (const [mk, m] of Object.entries(d.by_model || {})) {
         if (!agg[mk]) agg[mk] = { inputOther: 0, inputCacheRead: 0, inputCacheCreation: 0, output: 0, calls: 0, requests: 0, failed: 0 };
         const a = agg[mk];
@@ -1057,7 +1146,7 @@ window.Views = (function () {
   function checkAlerts(data) {
     const cfg = loadAlerts();
     if (!cfg.enabled || !data) return;
-    const day = (data.days || {})[data.today] || emptyDay(data.today);
+    const day = projectDay((data.days || {})[data.today]) || emptyDay(data.today);
     const now = Date.now();
     const cost = costOfAgg(day);
     if (cfg.costLimit > 0 && cost > cfg.costLimit) {
@@ -1097,9 +1186,6 @@ window.Views = (function () {
     // 详情返回
     const mb = el("md-back"); if (mb) mb.addEventListener("click", () => switchView("models"));
     const sb2 = el("sd-back"); if (sb2) sb2.addEventListener("click", () => switchView("sessions"));
-    // 事件页：查看全部
-    const em = el("ev-more");
-    if (em) em.addEventListener("click", () => { evAll = !evAll; if (current) renderView(current, range); });
     // 设置页：标签切换
     document.querySelectorAll(".settings-tab").forEach(tab => {
       tab.addEventListener("click", () => {
@@ -1167,12 +1253,16 @@ window.Views = (function () {
       const empty = tbody?.querySelector(".pm-empty");
       if (empty) empty.closest("tr").remove();
       addModelRow("", null);
+      pmDirty = true; // 未保存：轮询期间不重建表格
       updateModelCount();
     });
     const pmf = el("pm-fill");
     if (pmf) pmf.addEventListener("click", fillFromCatalog);
     const pms = el("pm-search");
     if (pms) pms.addEventListener("input", filterModelRows);
+    // 表格内任何编辑（改价/改名）都标记未保存，防止轮询重建冲掉
+    const pmBody = el("pm-rows");
+    if (pmBody) pmBody.addEventListener("input", () => { pmDirty = true; });
     buildModelRows();
     updateModelCount();
     // 内置价格目录：同步在线 / 恢复内置
@@ -1260,7 +1350,7 @@ window.Views = (function () {
     if (od2) {
       od2.addEventListener("click", async () => {
         try {
-          await fetch("/api/open", { cache: "no-store" });
+          await fetch("/api/open?source=" + encodeURIComponent(sourceFilter), { cache: "no-store" });
         } catch (er) { /* 静默 */ }
       });
     }

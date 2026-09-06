@@ -13,9 +13,9 @@ let current = null;
 let range = "today"; // today | week | month | custom
 let customRange = { start: null, end: null }; // 自定义范围（YYYY-MM-DD，含首尾）
 let prices = loadPrices();
-let autoFollow = true;       // 事件流是否自动跟随顶部（用户滚离顶部即暂停）
 let chartGranularity = "hour"; // Token 使用趋势粒度：hour | day
 const evFilter = { scope: "all", model: "" }; // 事件流过滤：全部/主/子/失败 + 模型
+let sourceFilter = "all"; // 来源筛选：all=全部（顶层+Σ外部源）| kimi | zcode | dsh ...（外部源自带前缀）
 
 /* ---------- 定价 ---------- */
 function loadPrices() {
@@ -100,7 +100,7 @@ function buildRangeData(data, granularity = chartGranularity) {
   const today = data.today;
 
   if (range === "today") {
-    const day = days[today] || emptyDay(today);
+    const day = projectDay(days[today]) || emptyDay(today);
     if (granularity === "hour") {
       return { day, buckets: todayBuckets(day), title: "今日小时趋势", label: "今日" };
     }
@@ -109,6 +109,7 @@ function buildRangeData(data, granularity = chartGranularity) {
       buckets: [{
         key: today, label: today.slice(5), day,
         in: day.inputOther || 0, cache: day.inputCacheRead || 0, out: day.output || 0, req: day.requests || 0,
+        cw: day.inputCacheCreation || 0,
       }],
       title: "今日日趋势", label: "今日",
     };
@@ -116,7 +117,7 @@ function buildRangeData(data, granularity = chartGranularity) {
 
   // week / month / custom：按日期键枚举（升序），口径统一走 rangeDayKeys
   const keys = rangeDayKeys(data);
-  const dayBuckets = keys.map(k => ({ key: k, label: k.slice(5), day: days[k] || emptyDay(k) }));
+  const dayBuckets = keys.map(k => ({ key: k, label: k.slice(5), day: projectDay(days[k]) || emptyDay(k) }));
   const agg = emptyDay("__agg__");
   for (const b of dayBuckets) mergeDay(agg, b.day);
   const label = rangeLabel();
@@ -126,6 +127,7 @@ function buildRangeData(data, granularity = chartGranularity) {
     const buckets = dayBuckets.map(b => ({
       key: b.key, label: b.label, day: b.day,
       in: b.day.inputOther || 0, cache: b.day.inputCacheRead || 0, out: b.day.output || 0, req: b.day.requests || 0,
+      cw: b.day.inputCacheCreation || 0,
     }));
     return { day: agg, buckets, title, label };
   }
@@ -133,7 +135,7 @@ function buildRangeData(data, granularity = chartGranularity) {
   // hour granularity for week/month/custom: aggregate hourly data across days
   const hourly = new Array(24).fill(null).map((_, h) => ({
     key: h, label: String(h).padStart(2, "0"),
-    in: 0, cache: 0, out: 0, req: 0,
+    in: 0, cache: 0, out: 0, cw: 0, req: 0,
   }));
   for (const b of dayBuckets) {
     const dayHourly = b.day.hourly || {};
@@ -142,6 +144,7 @@ function buildRangeData(data, granularity = chartGranularity) {
       hourly[h].in += hv.input || 0;
       hourly[h].cache += hv.cached || 0;
       hourly[h].out += hv.output || 0;
+      hourly[h].cw += hv.cacheWrite || 0;
       hourly[h].req += hv.requests || 0;
     }
   }
@@ -191,50 +194,86 @@ function localDateKey(d) {
   return `${y}-${m}-${dd}`;
 }
 function emptyDay(date) {
-  return { date, inputOther: 0, inputCacheRead: 0, inputCacheCreation: 0, output: 0, calls: 0, requests: 0, failed: 0, by_model: {}, by_session: {}, hourly: {}, by_scope: {} };
+  return { date, inputOther: 0, inputCacheRead: 0, inputCacheCreation: 0, output: 0, calls: 0, requests: 0, failed: 0, by_model: {}, by_session: {}, hourly: {}, by_scope: {}, by_source: {} };
+}
+/** 来源筛选投影：把某天的原始槽位投影为当前 sourceFilter 视角。
+ *  kimi=顶层原样；all=顶层（纯 kimi）+Σ外部源槽（mergeDay 复用嵌套合并）；
+ *  具体外部源=仅该源槽（零值补全），by_session/by_scope 只存在于顶层，外部源视角下保持空。 */
+function projectDay(day) {
+  if (!day) return null;
+  if (sourceFilter === "kimi") return day;
+  const bs = day.by_source || {};
+  if (sourceFilter === "all") {
+    // by_model/hourly/by_session/by_scope 全部重建为独立副本：与原始 day 共享引用时，
+    // mergeDay 对已存在键原地 += 会污染 current 数据（by_session 条目含嵌套 by_model/hourly，
+    // 由 mergeDay 从空对象拷出即得够深拷贝；by_source 只读不重建）
+    const out = Object.assign({}, day, { by_model: {}, hourly: {}, by_session: {}, by_scope: {} });
+    // 先把 kimi 顶层自身的嵌套并入新对象，再叠加外部源槽
+    mergeDay(out, { by_model: day.by_model, hourly: day.hourly, by_session: day.by_session, by_scope: day.by_scope });
+    for (const [src, slot] of Object.entries(bs)) {
+      if (src !== "kimi" && slot) mergeDay(out, slot);
+    }
+    return out;
+  }
+  return Object.assign(emptyDay(day.date), bs[sourceFilter] || {});
 }
 function mergeDay(acc, d) {
   if (!d) return;
-  acc.inputOther += d.inputOther || 0;
-  acc.inputCacheRead += d.inputCacheRead || 0;
-  acc.inputCacheCreation += d.inputCacheCreation || 0;
-  acc.output += d.output || 0;
-  acc.calls += d.calls || 0;
-  acc.requests += d.requests || 0;
-  acc.failed += d.failed || 0;
+  // 所有累加点统一 (x||0)+(v||0)：缺键（如旧版本/外部源槽位）数据不产 NaN
+  const add = (o, k, v) => { o[k] = (o[k] || 0) + (v || 0); };
+  add(acc, "inputOther", d.inputOther);
+  add(acc, "inputCacheRead", d.inputCacheRead);
+  add(acc, "inputCacheCreation", d.inputCacheCreation);
+  add(acc, "output", d.output);
+  add(acc, "calls", d.calls);
+  add(acc, "requests", d.requests);
+  add(acc, "failed", d.failed);
+  // 顶层小时分布（by_session 内的嵌套 hourly 在下方单独处理）
+  for (const [hk, hv] of Object.entries(d.hourly || {})) {
+    if (!acc.hourly) acc.hourly = {};
+    if (!acc.hourly[hk]) acc.hourly[hk] = { input: 0, cached: 0, output: 0, calls: 0, requests: 0, cacheWrite: 0 };
+    const hh = acc.hourly[hk];
+    add(hh, "input", hv.input); add(hh, "cached", hv.cached); add(hh, "output", hv.output);
+    add(hh, "calls", hv.calls); add(hh, "requests", hv.requests); add(hh, "cacheWrite", hv.cacheWrite);
+  }
   for (const [k, v] of Object.entries(d.by_model || {})) {
-    if (!acc.by_model[k]) acc.by_model[k] = { ...v, model: k, failed: v.failed || 0 };
-    else {
+    if (!acc.by_model[k]) {
+      acc.by_model[k] = { inputOther: 0, inputCacheRead: 0, inputCacheCreation: 0, output: 0, calls: 0, requests: 0, ...v, model: k, failed: v.failed || 0 };
+    } else {
       const m = acc.by_model[k];
-      m.inputOther += v.inputOther || 0; m.inputCacheRead += v.inputCacheRead || 0;
-      m.inputCacheCreation += v.inputCacheCreation || 0; m.output += v.output || 0; m.calls += v.calls || 0; m.requests += v.requests || 0;
-      m.failed = (m.failed || 0) + (v.failed || 0);
+      add(m, "inputOther", v.inputOther); add(m, "inputCacheRead", v.inputCacheRead);
+      add(m, "inputCacheCreation", v.inputCacheCreation); add(m, "output", v.output);
+      add(m, "calls", v.calls); add(m, "requests", v.requests); add(m, "failed", v.failed);
     }
   }
   for (const [k, v] of Object.entries(d.by_session || {})) {
-    if (!acc.by_session[k]) acc.by_session[k] = { ...v, session: k, by_model: {}, hourly: {}, failed: v.failed || 0 };
-    else {
+    if (!acc.by_session[k]) {
+      acc.by_session[k] = { inputOther: 0, inputCacheRead: 0, inputCacheCreation: 0, output: 0, calls: 0, requests: 0, ...v, session: k, by_model: {}, hourly: {}, failed: v.failed || 0 };
+    } else {
       const x = acc.by_session[k];
-      x.inputOther += v.inputOther || 0; x.inputCacheRead += v.inputCacheRead || 0;
-      x.inputCacheCreation += v.inputCacheCreation || 0; x.output += v.output || 0; x.calls += v.calls || 0; x.requests += v.requests || 0;
-      x.failed = (x.failed || 0) + (v.failed || 0);
+      add(x, "inputOther", v.inputOther); add(x, "inputCacheRead", v.inputCacheRead);
+      add(x, "inputCacheCreation", v.inputCacheCreation); add(x, "output", v.output);
+      add(x, "calls", v.calls); add(x, "requests", v.requests); add(x, "failed", v.failed);
     }
     // 嵌套合并会话内模型构成与小时分布
     const xs = acc.by_session[k];
     for (const [mk, mv] of Object.entries(v.by_model || {})) {
-      if (!xs.by_model[mk]) xs.by_model[mk] = { ...mv, model: mk, failed: mv.failed || 0 };
-      else {
+      if (!xs.by_model[mk]) {
+        xs.by_model[mk] = { inputOther: 0, inputCacheRead: 0, inputCacheCreation: 0, output: 0, calls: 0, requests: 0, ...mv, model: mk, failed: mv.failed || 0 };
+      } else {
         const mm = xs.by_model[mk];
-        mm.inputOther += mv.inputOther || 0; mm.inputCacheRead += mv.inputCacheRead || 0;
-        mm.inputCacheCreation += mv.inputCacheCreation || 0; mm.output += mv.output || 0; mm.calls += mv.calls || 0; mm.requests += mv.requests || 0;
-        mm.failed = (mm.failed || 0) + (mv.failed || 0);
+        add(mm, "inputOther", mv.inputOther); add(mm, "inputCacheRead", mv.inputCacheRead);
+        add(mm, "inputCacheCreation", mv.inputCacheCreation); add(mm, "output", mv.output);
+        add(mm, "calls", mv.calls); add(mm, "requests", mv.requests); add(mm, "failed", mv.failed);
       }
     }
     for (const [hk, hv] of Object.entries(v.hourly || {})) {
-      if (!xs.hourly[hk]) xs.hourly[hk] = { ...hv };
-      else {
+      if (!xs.hourly[hk]) {
+        xs.hourly[hk] = { input: 0, cached: 0, output: 0, calls: 0, requests: 0, cacheWrite: 0, ...hv };
+      } else {
         const hh = xs.hourly[hk];
-        hh.input += hv.input || 0; hh.cached += hv.cached || 0; hh.output += hv.output || 0; hh.calls += hv.calls || 0; hh.requests += hv.requests || 0;
+        add(hh, "input", hv.input); add(hh, "cached", hv.cached); add(hh, "output", hv.output);
+        add(hh, "calls", hv.calls); add(hh, "requests", hv.requests); add(hh, "cacheWrite", hv.cacheWrite);
       }
     }
   }
@@ -244,10 +283,9 @@ function mergeDay(acc, d) {
         inputCacheCreation: 0, output: 0, calls: 0, requests: 0, failed: 0, by_model: {} };
     }
     const sc = acc.by_scope[k];
-    sc.inputOther += v.inputOther || 0; sc.inputCacheRead += v.inputCacheRead || 0;
-    sc.inputCacheCreation += v.inputCacheCreation || 0; sc.output += v.output || 0;
-    sc.calls += v.calls || 0; sc.requests += v.requests || 0;
-    sc.failed = (sc.failed || 0) + (v.failed || 0);
+    add(sc, "inputOther", v.inputOther); add(sc, "inputCacheRead", v.inputCacheRead);
+    add(sc, "inputCacheCreation", v.inputCacheCreation); add(sc, "output", v.output);
+    add(sc, "calls", v.calls); add(sc, "requests", v.requests); add(sc, "failed", v.failed);
     // 嵌套合并作用域内各模型的用量（by_scope[scope].by_model）
     for (const [mk, mv] of Object.entries(v.by_model || {})) {
       if (!sc.by_model[mk]) {
@@ -255,10 +293,9 @@ function mergeDay(acc, d) {
           inputCacheCreation: 0, output: 0, calls: 0, requests: 0, failed: 0 };
       }
       const mm = sc.by_model[mk];
-      mm.inputOther += mv.inputOther || 0; mm.inputCacheRead += mv.inputCacheRead || 0;
-      mm.inputCacheCreation += mv.inputCacheCreation || 0; mm.output += mv.output || 0;
-      mm.calls += mv.calls || 0; mm.requests += mv.requests || 0;
-      mm.failed = (mm.failed || 0) + (mv.failed || 0);
+      add(mm, "inputOther", mv.inputOther); add(mm, "inputCacheRead", mv.inputCacheRead);
+      add(mm, "inputCacheCreation", mv.inputCacheCreation); add(mm, "output", mv.output);
+      add(mm, "calls", mv.calls); add(mm, "requests", mv.requests); add(mm, "failed", mv.failed);
     }
   }
 }

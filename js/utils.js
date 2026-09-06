@@ -27,28 +27,28 @@ function changed(key, val) {
 }
 /** 复制文本到剪贴板，失败回退隐藏 textarea + execCommand */
 function copyText(text, btn) {
-  const done = () => {
-    btn.textContent = "已复制";
+  const flash = (msg) => {
+    btn.textContent = msg;
     setTimeout(() => { if (btn.isConnected) btn.textContent = btn.dataset.label || "复制"; }, 1200);
   };
+  const done = () => flash("已复制");
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done, flash));
   } else {
-    fallbackCopy(text, done);
+    fallbackCopy(text, done, flash);
   }
 }
-function fallbackCopy(text, done) {
+function fallbackCopy(text, done, flash) {
   const ta = document.createElement("textarea");
   ta.value = text;
   ta.style.position = "fixed";
   ta.style.opacity = "0";
   document.body.appendChild(ta);
   ta.select();
-  try {
-    document.execCommand("copy");
-    done();
-  } catch (e) { /* 复制失败静默 */ }
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
   ta.remove();
+  ok ? done() : (flash && flash("复制失败"));
 }
 
 /* ---------- 格式化 ---------- */

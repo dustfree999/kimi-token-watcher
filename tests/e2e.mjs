@@ -193,6 +193,22 @@ const fillInfo = await page.evaluate(async () => {
 ok("从目录填充-生成预填价格行", fillInfo.filled > 0 && fillInfo.prefilled && /已填充/.test(fillInfo.status || ""),
   JSON.stringify(fillInfo));
 
+// 5c-2. 回归：填充后跨过 2 秒轮询，未保存的行不应被轮询重建冲掉；随后保存应全部写入
+const dirtyInfo = await page.evaluate(async () => {
+  const count = () => [...document.getElementById("pm-rows").querySelectorAll("tr")]
+    .filter(r => !r.querySelector(".pm-empty") && r.querySelector(".pm-name").value.trim()).length;
+  const before = count();
+  await new Promise(r => setTimeout(r, 2600)); // 跨过至少一次 2s 轮询
+  const after = count();
+  document.getElementById("set-price-save").click();
+  await new Promise(r => setTimeout(r, 300));
+  const saved = JSON.parse(localStorage.getItem("kimi_token_prices") || "{}");
+  return { before, after, savedCount: Object.keys(saved.models || {}).length };
+});
+ok("从目录填充-轮询不冲掉未保存行+保存生效",
+  dirtyInfo.before > 0 && dirtyInfo.after === dirtyInfo.before && dirtyInfo.savedCount === dirtyInfo.before,
+  JSON.stringify(dirtyInfo));
+
 // 5d. 只填模型名、不填价格 → 保存时跳过，不写入全 0 覆盖
 const skipInfo = await page.evaluate(async () => {
   document.getElementById("pm-add").click();

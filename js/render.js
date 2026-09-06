@@ -3,13 +3,11 @@
    渲染 + 定价弹窗
    依赖：全局 el/esc/keyOf/copyText/changed/fmtTok/fmtYi/fmtFull/
          costOf/totOf/peakRange/hourRateTrend（js/utils.js）、
-         current/range/prices/chartGranularity/autoFollow/
-         evFilter（js/data.js）
+         current/range/prices/chartGranularity/evFilter（js/data.js）
    ============================================================ */
 "use strict";
 
 /* ---------- 渲染专属状态 ---------- */
-let evMore = false;          // 事件流：默认 60 条，true 展示最多 200 条
 const expandedSessions = new Set(); // 记住已展开的会话，轮询重绘时恢复
 
 /* ---------- 渲染 ---------- */
@@ -311,13 +309,14 @@ function renderModelDonut(models) {
   const donut = el("model-donut");
   const legend = el("model-legend");
   const center = el("model-donut-total");
-  if (!models.length) {
+  const total = models.reduce((a, m) => a + totOf(m), 0);
+  // 无记录或全部模型总 tokens 为 0：走空态，避免空 stops 的 conic-gradient 非法、残留上一帧背景
+  if (!models.length || total <= 0) {
     donut.style.background = "var(--bg)";
     if (center) center.textContent = "—";
     legend.innerHTML = '<span class="muted">暂无记录</span>';
     return;
   }
-  const total = models.reduce((a, m) => a + totOf(m), 0) || 1;
   if (center) center.textContent = fmtTok(total);
   let acc = 0;
   const stops = [];
@@ -346,7 +345,7 @@ function renderRows(d, sessionMeta) {
   renderModelDonut(models);
   el("model-count").textContent = models.length + " 个模型";
   const om = el("ov-model-rows");
-  const mSig = JSON.stringify(models.slice(0, 3).map(m => [m.model, totOf(m)]));
+  const mSig = JSON.stringify(models.slice(0, 3).map(m => [m.model, totOf(m), m.inputOther || 0, m.inputCacheRead || 0, m.output || 0, m.requests || 0]));
   if (!om) return;
   if (changed("ovmodels", mSig)) {
     om.innerHTML = "";
@@ -381,7 +380,7 @@ function renderRows(d, sessionMeta) {
   sessions.sort((a, b) => (totOf(b)) - (totOf(a)));
   const osr = el("ov-session-rows");
   if (!osr) return;
-  const sSig = JSON.stringify(sessions.slice(0, 3).map(s => [s.session, totOf(s)]));
+  const sSig = JSON.stringify(sessions.slice(0, 3).map(s => [s.session, totOf(s), s.inputOther || 0, s.inputCacheRead || 0, s.output || 0, s.requests || 0]));
   if (changed("ovsessions", sSig)) {
     osr.innerHTML = "";
     if (!sessions.length) {
@@ -475,7 +474,7 @@ function renderHistory(data) {
   const list = el("history-list");
   // 历史范围跟随顶部切换（今日=1 / 7天 / 30天 / 自定义）
   const keys = rangeDayKeys(data);
-  const entries = keys.map(k => days[k]).filter(Boolean).reverse(); // 窗口内倒序
+  const entries = keys.map(k => projectDay(days[k])).filter(Boolean).reverse(); // 窗口内倒序
   el("history-summary").textContent = rangeLabel() + " · " + entries.length + " 天有记录";
   // 数据未变化则跳过重建（局部更新；费用纳入签名，定价变化也会刷新）
   const hSig = entries.map(e => [e.date, e.inputOther, e.inputCacheRead, e.inputCacheCreation, e.output, e.calls, e.requests || 0, costOfAgg(e)]);
@@ -499,16 +498,6 @@ function renderHistory(data) {
   }
 }
 
-/** 事件流自动跟随提示（实时事件页专用，views.js 已接管事件列表渲染） */
-function updateEventFollowHint() {
-  const h = el("event-follow-hint");
-  if (!h) return;
-  h.textContent = autoFollow
-    ? (evMore ? "已显示全部事件 · 自动跟随" : "自动跟随")
-    : "已暂停跟随 · 滚动回顶部恢复";
-  h.classList.toggle("follow-paused", !autoFollow);
-}
-
 function renderStatus(data) {
   const badge = el("conn-status");
   const dot = badge.querySelector(".dot");
@@ -521,18 +510,20 @@ function renderStatus(data) {
   if (upEl && data.last_scan) {
     upEl.textContent = new Date(data.last_scan * 1000).toLocaleTimeString("zh-CN", { hour12: false });
   }
+  // 数据源目录跟随顶栏来源筛选（全部/无对应路径时回退 kimi 主目录）
+  const dirFor = ((data.source_paths || {})[sourceFilter]) || data.session_root;
   const dirEl = el("sb-dir");
-  if (dirEl && data.session_root) {
-    if (dirEl.textContent !== data.session_root) {
-      dirEl.textContent = data.session_root;
-      dirEl.title = data.session_root;
+  if (dirEl && dirFor) {
+    if (dirEl.textContent !== dirFor) {
+      dirEl.textContent = dirFor;
+      dirEl.title = dirFor;
     }
   }
   const svcEl = el("sb-service");
   if (svcEl) svcEl.textContent = location.host;
   // 设置页数据管理信息
   const gd = el("gs-dir");
-  if (gd && data.session_root && gd.textContent !== data.session_root) gd.textContent = data.session_root;
+  if (gd && dirFor && gd.textContent !== dirFor) gd.textContent = dirFor;
   const gf = el("gs-files");
   if (gf) gf.textContent = (data.tracked_files || 0) + " 个日志文件";
   el("last-refresh").textContent = "更新于 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });

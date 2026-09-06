@@ -2,10 +2,35 @@
    Kimi Code Token 监控 · 前端逻辑
    轮询 + 初始化 + setRange
    依赖：全局 el/esc/copyText/fmtTok（js/utils.js）、
-         current/range/prices/chartGranularity/autoFollow/
-         evFilter（js/data.js）、render/updateEventFollowHint（js/render.js）
+         current/range/prices/chartGranularity/evFilter（js/data.js）、
+         render（js/render.js）
    ============================================================ */
 "use strict";
+
+/* ---------- 来源筛选 chips（kimi 恒显示、外部源有数据才出现） ---------- */
+function updateSourceSwitch(data) {
+  const sw = el("source-switch");
+  if (!sw) return;
+  const list = (data.sources || []).filter(s => s.id === "kimi" || (s.calls || 0) > 0);
+  // 选中源已无数据时回退"全部"（仅当外部源被移除时发生）
+  if (sourceFilter !== "all" && !list.some(s => s.id === sourceFilter)) sourceFilter = "all";
+  // 结构签名只含 id/label（calls 变化不重建 DOM，避免轮询期间点击被打断）
+  const sig = "all|" + list.map(s => s.id + "|" + s.label).join("~");
+  if (changed("sourceSwitch", sig)) {
+    sw.innerHTML = `<button data-source="all" class="${sourceFilter === "all" ? "active" : ""}">全部</button>` +
+      list.map(s => `<button data-source="${esc(s.id)}" class="${s.id === sourceFilter ? "active" : ""}" title="${esc(s.label)}">${esc(s.label)}<span class="ss-calls">${fmt.format(s.calls || 0)}</span></button>`).join("");
+  } else {
+    // 只同步选中态与 calls 数字
+    sw.querySelectorAll("button").forEach(b => {
+      b.classList.toggle("active", b.dataset.source === sourceFilter);
+      const n = b.querySelector(".ss-calls");
+      if (n) {
+        const s = list.find(x => x.id === b.dataset.source);
+        n.textContent = s && s.id !== "all" ? fmt.format(s.calls || 0) : "";
+      }
+    });
+  }
+}
 
 /* ---------- 轮询 ---------- */
 function isFileProtocol() { return window.location.protocol === "file:"; }
@@ -39,6 +64,7 @@ async function refresh() {
       el("last-refresh").textContent = String(e);
       return;
     }
+    updateSourceSwitch(data);
     render(data);
     // 告警通知检查（今日费用 / 失败次数超阈值）
     if (window.Views && window.Views.checkAlerts) window.Views.checkAlerts(data);
@@ -91,15 +117,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (current) render(current);
   });
 
-  // 自动滚动（旧事件流卡片已移除，保留防错）
-  const evStream = el("event-stream");
-  if (evStream) {
-    evStream.addEventListener("scroll", () => {
-      autoFollow = evStream.scrollTop < 30;
-      updateEventFollowHint();
-    });
-  }
-  updateEventFollowHint();
+  // 来源筛选切换（全部 / Kimi Code / ZCode / DSH ...）
+  el("source-switch").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-source]");
+    if (!btn) return;
+    sourceFilter = btn.dataset.source;
+    document.querySelectorAll("#source-switch button").forEach(b => b.classList.toggle("active", b === btn));
+    if (current) render(current);
+  });
 
   // 范围切换
   el("range-switch").addEventListener("click", (e) => {
@@ -110,6 +135,16 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   /* ---------- 自定义时间范围弹窗 ---------- */
+  /** 归一化自定义范围：先交换 start/end → 两端都钳到不晚于今日 → 钳后仍有 start>end 则重置为 [今日, 今日] */
+  function normalizeCustomRange(s, e) {
+    if (!s || !e) return null;
+    const today = (current && current.today) || localDateKey(new Date());
+    if (s > e) { const t = s; s = e; e = t; }
+    if (s > today) s = today;
+    if (e > today) e = today;
+    if (s > e) { s = today; e = today; }
+    return { start: s, end: e };
+  }
   function openCustomRange() {
     el("cr-start").value = customRange.start || "";
     el("cr-end").value = customRange.end || "";
@@ -119,10 +154,7 @@ document.addEventListener("DOMContentLoaded", () => {
   el("cr-apply").addEventListener("click", () => {
     const s = el("cr-start").value, e = el("cr-end").value;
     if (!s || !e) { el("cr-hint").textContent = "请选择开始与结束日期"; return; }
-    let st = s, en = e;
-    if (st > en) { const t = st; st = en; en = t; } // 防呆：交换
-    if (current && current.today && en > current.today) en = current.today; // end 不超过今日
-    customRange = { start: st, end: en };
+    customRange = normalizeCustomRange(s, e); // 交换 + 两端钳到今日（钳后 start>end 重置为今日）
     el("custom-range-overlay").classList.add("hidden");
     const cBtn = document.querySelector('#range-switch button[data-range="custom"]');
     setRange("custom", cBtn); // 复用 setRange：激活态 + 粒度按钮禁用态一并处理
@@ -145,8 +177,9 @@ document.addEventListener("DOMContentLoaded", () => {
   if (urlRange === "custom") {
     const qs = new URLSearchParams(location.search);
     const st = qs.get("start"), en = qs.get("end");
-    if (st && en) {
-      customRange = { start: st, end: en };
+    const norm = normalizeCustomRange(st, en); // 与弹窗同一套归一化：未来日期钳到今日，防 rangeDayKeys 空集 → 事件页恒空
+    if (norm) {
+      customRange = norm;
       range = "custom";
       const btn = document.querySelector('#range-switch button[data-range="custom"]');
       if (btn) btn.classList.add("active");
@@ -181,7 +214,7 @@ document.addEventListener("DOMContentLoaded", () => {
     dirBtn.addEventListener("click", async () => {
       const orig = dirBtn.textContent;
       try {
-        const resp = await fetch("/api/open", { cache: "no-store" });
+        const resp = await fetch("/api/open?source=" + encodeURIComponent(sourceFilter), { cache: "no-store" });
         const j = await resp.json();
         dirBtn.textContent = j.ok ? "已打开" : "无法打开";
       } catch (e) {
